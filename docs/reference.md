@@ -2276,7 +2276,10 @@ conversations, but a conversation already on it stays there until 98%.
 
 **The routings.** Smart, Least used first and Use before expiry go by the share
 used of the fullest window that counts the model, the 5-hour window
-included. Smart and Use before expiry put an account behind the others once a
+included. A card's credit pools (Qoder's Credits and its Add-on credits)
+are spent one after another, so one used up while another of the same span
+still has room doesn't count: the account goes by the pool covering it.
+Smart and Use before expiry put an account behind the others once a
 window is at 90% or more, and behind those once one is at 98% or more,
 each of these groups ordered by the share used.
 

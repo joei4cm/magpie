@@ -404,6 +404,13 @@ type Limit struct {
 	// Balance is how much is left in Unit, a wallet's reading with no
 	// share (QuotaWindow.Balance); nil when not told
 	Balance *float64
+	// creditPool: the window is one of the card's credit pools — a
+	// bucket of its own rather than a limit over the others — which the
+	// vendor spends one after another (Qoder's Credits, the one its
+	// check-in fills, then its Add-on credits). Used up, one is no
+	// obstacle while another of the same span still has room
+	// (usedUpPoolAside).
+	creditPool bool
 }
 
 // OnCredits says whether the account goes on past its allowance on its
@@ -483,6 +490,8 @@ func (l Limit) applies(model string) bool {
 // used of the fullest window that counts it, and when those windows renew,
 // the biggest first — the longest, the week before the five hours in it.
 // A window whose reset has passed is empty again, its next reset not known.
+// A credit pool the card has used up while another still has room is no
+// share used (usedUpPoolAside).
 func (a Allowance) For(model string, now time.Time) (used float64, renews []time.Time) {
 	model = strings.ToLower(model)
 	var ls []Limit
@@ -493,7 +502,9 @@ func (a Allowance) For(model string, now time.Time) (used float64, renews []time
 		if !l.Resets.IsZero() && !l.Resets.After(now) {
 			l.Used, l.Resets = 0, time.Time{}
 		}
-		used = max(used, l.Used)
+		if !a.usedUpPoolAside(l, now) {
+			used = max(used, l.Used)
+		}
 		ls = append(ls, l)
 	}
 	sort.SliceStable(ls, func(i, j int) bool {
@@ -529,6 +540,27 @@ func (a Allowance) CapUsed(model string, now time.Time) float64 {
 		used = max(used, l.Used)
 	}
 	return used
+}
+
+// usedUpPoolAside says whether l is one of a card's credit pools that is
+// used up while another pool of the card, the same span long, still has
+// room: a vendor spends its pools one after another, not together, as
+// Qoder answers on its Add-on credits once the Credits its check-in fills
+// are used up (gtk96's card, 300 / 300 and 400 / 900, #2878). A window one
+// model's own is no pool: what it has left is that model's. Windows of
+// different spans are one allowance read over each (Open Design's five
+// hours and its week), not pools.
+func (a Allowance) usedUpPoolAside(l Limit, now time.Time) bool {
+	if !l.creditPool || l.Used < 100 {
+		return false
+	}
+	for _, o := range a {
+		// a pool whose reset passed is empty again, as For reads it
+		if o.creditPool && o.Span == l.Span && (o.Used < 100 || !o.Resets.IsZero() && !o.Resets.After(now)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Fullest is when the window For's share is of renews: the fullest that
@@ -1326,6 +1358,11 @@ func allowanceOf(ws []QuotaWindow, now time.Time) Allowance {
 			continue
 		}
 		l := Limit{Used: w.Used, Span: w.Span, Model: w.Model, Amount: w.Amount, Of: w.Limit, Unit: w.Unit, matches: w.matches, partial: w.partial, Name: w.Name, Credits: w.Credits, Resets: resets(w)}
+		if _, ok := creditOf(w); ok && w.Model == "" && w.matches == nil {
+			// a card's credit pools: each is a bucket of its own, spent one
+			// after another (usedUpPoolAside)
+			l.creditPool = true
+		}
 		if ids := families[w.Model]; ids != nil && w.Family != "" && w.matches == nil {
 			l.Model = ""
 			l.matches = func(model string) bool { return ids[model] }
