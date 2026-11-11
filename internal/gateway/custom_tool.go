@@ -33,40 +33,47 @@ func customToolRefused(model string) string { return "custom tools\x00" + model 
 // hasCustomTool reports whether a Responses body offers a custom tool:
 // among its tools, in a namespace there, or in an input item that carries
 // tools (Responses Lite's additional_tools, a tool search's output).
+// The conversation is not decoded: a long turn's history often contains
+// the bytes "custom" without offering a tool, and unmarshalling the whole
+// body to look was most of this check's CPU (#4892).
 func hasCustomTool(body []byte) bool {
 	if !bytes.Contains(body, []byte(`"custom"`)) {
 		return false
 	}
-	var m map[string]any
-	if json.Unmarshal(body, &m) != nil {
-		return false
-	}
-	if customIn(m["tools"]) {
+	if tools, found, ok := topMember(body, "tools"); ok && found && customIn(tools) {
 		return true
 	}
-	items, _ := m["input"].([]any)
-	for _, it := range items {
-		if im, _ := it.(map[string]any); im != nil && customIn(im["tools"]) {
-			return true
-		}
-	}
-	return false
+	return anyInputItem(body, func(it []byte) bool {
+		tools, has := memberOf(it, "tools")
+		return has && customIn(tools)
+	})
 }
 
-// customIn reports whether a list of tools has a custom one, a namespace's
-// included.
-func customIn(v any) bool {
-	tools, _ := v.([]any)
-	for _, t := range tools {
-		tm, _ := t.(map[string]any)
-		if tm == nil {
-			continue
-		}
-		if tm["type"] == "custom" || tm["type"] == "namespace" && customIn(tm["tools"]) {
+// customIn reports whether a JSON array of tools has a custom one, a
+// namespace's included. Any other value has none.
+func customIn(tools []byte) bool {
+	if len(tools) == 0 || tools[0] != '[' {
+		return false
+	}
+	found := false
+	eachElement(tools, func(t []byte) bool {
+		ty, ok := stringBytes(memberOrNil(t, "type"))
+		if !ok {
 			return true
 		}
-	}
-	return false
+		switch string(ty) {
+		case "custom":
+			found = true
+			return false
+		case "namespace":
+			if more, has := memberOf(t, "tools"); has && customIn(more) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // customStream gives a custom tool's input as its call's arguments come,
