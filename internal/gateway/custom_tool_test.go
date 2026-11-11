@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -226,5 +227,162 @@ func TestCustomToolRefusalWordings(t *testing.T) {
 		if customToolRefusal.Match([]byte(b)) {
 			t.Errorf("taken for one: %s", b)
 		}
+	}
+}
+
+// hasCustomToolCases are the shapes a Responses body's tools can take for
+// this check: a custom one at the top level, one under a namespace, one
+// an input item carries (Lite's additional_tools), a function-only list,
+// and message text that only spells the word.
+func TestHasCustomToolShapes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "top-level custom",
+			body: `{"model":"m","input":[{"role":"user","content":"go"}],` +
+				`"tools":[{"type":"custom","name":"exec","description":"Run."}]}`,
+			want: true,
+		},
+		{
+			name: "namespace custom",
+			body: `{"model":"m","input":[],"tools":[{"type":"namespace","name":"functions","tools":[` +
+				`{"type":"function","name":"wait"},{"type":"custom","name":"exec"}]}]}`,
+			want: true,
+		},
+		{
+			name: "nested namespace custom",
+			body: `{"model":"m","input":[],"tools":[{"type":"namespace","name":"outer","tools":[` +
+				`{"type":"namespace","name":"inner","tools":[{"type":"custom","name":"exec"}]}]}]}`,
+			want: true,
+		},
+		{
+			name: "input item tools custom",
+			body: `{"model":"m","input":[{"type":"additional_tools","role":"developer","tools":[` +
+				`{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]}]},` +
+				`{"type":"message","role":"user","content":[{"type":"input_text","text":"list"}]}]}`,
+			want: true,
+		},
+		{
+			name: "function only",
+			body: `{"model":"m","input":[{"role":"user","content":"go"}],` +
+				`"tools":[{"type":"function","name":"wait","parameters":{"type":"object"}}]}`,
+			want: false,
+		},
+		{
+			name: "history spells custom",
+			body: `{"model":"m","input":[{"role":"user","content":"write a custom tool later"}],` +
+				`"tools":[{"type":"function","name":"wait","parameters":{"type":"object"}}]}`,
+			want: false,
+		},
+		{
+			// The prefilter is the bytes "custom": a history value that is
+			// exactly that word reaches the walk without offering a tool.
+			name: "history value is custom",
+			body: `{"model":"m","input":[{"role":"user","content":"note","tag":"custom"}],` +
+				`"tools":[{"type":"function","name":"wait","parameters":{"type":"object"}}]}`,
+			want: false,
+		},
+		{
+			name: "no tools and custom in text",
+			body: `{"model":"m","input":[{"role":"user","content":"the word custom is here"}]}`,
+			want: false,
+		},
+		{
+			name: "malformed",
+			body: `{"model":"m","tools":[{"type":"custom"}],`,
+			want: false,
+		},
+		{
+			name: "not an object",
+			body: `[{"type":"custom"}]`,
+			want: false,
+		},
+		{
+			name: "type is not a string",
+			body: `{"model":"m","input":[],"tools":[{"type":123},{"type":"custom","name":"e"}]}`,
+			want: true,
+		},
+		{
+			name: "null tools",
+			body: `{"model":"m","input":[],"tools":null}`,
+			want: false,
+		},
+		{
+			name: "escaped type key still read",
+			body: `{"model":"m","input":[],"tools":[{"type":"custom","name":"e"}],"input":[]}`,
+			want: true,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := hasCustomTool([]byte(c.body)); got != c.want {
+				t.Fatalf("hasCustomTool = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A long turn whose history only spells the word custom must not decode
+// the body: the old hasCustomTool unmarshalled the whole request into a
+// map[string]any whenever the bytes "custom" appeared anywhere (#4892).
+// Allocations on the long body stay near the short body's; with the full
+// unmarshal put back they grow with the history.
+func TestHasCustomToolDoesNotDecodeTheHistory(t *testing.T) {
+	// Function tools only; each history item carries a "custom" value so
+	// the prefilter hits, but nothing offers a custom tool.
+	var b strings.Builder
+	b.WriteString(`{"model":"fake/m1","stream":true,"tools":[{"type":"function","name":"wait","parameters":{"type":"object"}}],"input":[`)
+	for i := 0; i < 800; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"type":"message","role":"user","tag":"custom","content":[{"type":"input_text","text":"turn %d: not a tool"}]}`, i)
+	}
+	b.WriteString(`]}`)
+	body := []byte(b.String())
+	if len(body) < 64<<10 {
+		t.Fatalf("fixture is %d bytes, want at least 64KB", len(body))
+	}
+	if !bytes.Contains(body, []byte(`"custom"`)) {
+		t.Fatal("fixture must contain the bytes the prefilter looks for")
+	}
+	if hasCustomTool(body) {
+		t.Fatal("history value taken for a custom tool")
+	}
+
+	// A short body with the same shape: tools + one input item.
+	short := []byte(`{"model":"fake/m1","stream":true,"tools":[{"type":"function","name":"wait","parameters":{"type":"object"}}],"input":[{"type":"message","role":"user","tag":"custom","content":[{"type":"input_text","text":"turn: not a tool"}]}]}`)
+	if hasCustomTool(short) {
+		t.Fatal("short history value taken for a custom tool")
+	}
+
+	large := testing.AllocsPerRun(20, func() { hasCustomTool(body) })
+	small := testing.AllocsPerRun(20, func() { hasCustomTool(short) })
+	// The check walks the body but must not build a value tree from it.
+	// The old unmarshal of 64KB allocated thousands of times; a walk of
+	// the same body stays within a small multiple of the short body.
+	if large > small*8+64 {
+		t.Fatalf("hasCustomTool on a %d-byte body allocated %.0f times (short body %.0f); it must not decode the history", len(body), large, small)
+	}
+}
+
+// A body that does offer a custom tool still finds it when the history
+// is long: the walk reaches tools and input[].tools without unmarshalling
+// the messages between them.
+func TestHasCustomToolFindsToolInLongHistory(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"model":"fake/m1","input":[`)
+	for i := 0; i < 300; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"type":"message","role":"user","content":[{"type":"input_text","text":"custom note %d"}]}`, i)
+	}
+	b.WriteString(`,{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec","description":"Run."}]}]}]}`)
+	body := []byte(b.String())
+	if !hasCustomTool(body) {
+		t.Fatal("custom tool under additional_tools in a long history was not found")
 	}
 }
