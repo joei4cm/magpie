@@ -402,8 +402,11 @@ type filming struct {
 var filmingRead = []string{"model", "prompt", "seconds", "size", "input_reference", "last_frame", "reference_images", "reference_images[]"}
 
 // readFilming reads a videos request: JSON, or the multipart form OpenAI's
-// takes, the image to start from its input_reference.
-func readFilming(r *http.Request) (filming, error) {
+// takes, the image to start from its input_reference. body is the request's,
+// already read and bounded by the gateway's body room (requestBody), so the
+// JSON branch reads it from there rather than making a second copy of it
+// (#3069).
+func readFilming(r *http.Request, body []byte) (filming, error) {
 	var f filming
 	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if ct == "multipart/form-data" {
@@ -450,10 +453,6 @@ func readFilming(r *http.Request) (filming, error) {
 			}
 		}
 	} else {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			return f, err
-		}
 		var in struct {
 			Model           string          `json:"model"`
 			Prompt          string          `json:"prompt"`
@@ -1088,7 +1087,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	start := time.Now()
-	f, err := readFilming(r)
+	f, err := readFilming(r, inputBody)
 	if err != nil {
 		writeError(w, provider.Chat, 400, err.Error())
 		return

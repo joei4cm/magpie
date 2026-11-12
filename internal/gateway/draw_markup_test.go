@@ -42,10 +42,10 @@ func TestCodexEditSendsTheMarkup(t *testing.T) {
 		t.Fatal("the provider is not a ChatGPT account")
 	}
 	s := New()
-	r := httptest.NewRequest("POST", "/v1/images/edits", strings.NewReader(
-		`{"model":"art/gpt-image-1","prompt":"apply the annotation","images":[{"image_url":"`+sourceURL()+`"}],"markup":{"image_url":"`+markupURL()+`"}}`))
+	body := []byte(`{"model":"art/gpt-image-1","prompt":"apply the annotation","images":[{"image_url":"` + sourceURL() + `"}],"markup":{"image_url":"` + markupURL() + `"}}`)
+	r := httptest.NewRequest("POST", "/v1/images/edits", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	d, err := readDrawing(r)
+	d, err := readDrawing(r, body)
 	if err != nil {
 		t.Fatal(err)
 	}
