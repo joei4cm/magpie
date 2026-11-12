@@ -2999,6 +2999,17 @@ const (
 	holdMost    = 1 << 20
 )
 
+// wholeMost is the most a reply wanted whole (wantWhole) is held. Such a
+// reply is held to its end with no byte bound of its own — it is only
+// useful whole, so it is never let through at its first content (#2274) —
+// and a long history's summary is exactly where a reply is large, held in
+// full for every in-flight request (#3069). Past it the reply fails as one
+// that ended incomplete does, which asks the next candidate and rests
+// nobody. It is far past any summary a model writes: a compaction's
+// summary is a completion bounded by its output limit, and 8 MiB of SSE
+// frames is a reply no model produces.
+const wholeMost = 8 << 20
+
 // holdBuffered is how long a stream is held once the ChatGPT backend has
 // said it holds the reply back for extra safety checks (response.metadata,
 // safety_buffering): gpt-6.x at xhigh said nothing for 35s and then failed
@@ -3171,6 +3182,19 @@ func (h *holdWriter) scan() {
 		return
 	}
 	if h.wantWhole {
+		// A reply wanted whole is held to its end with no byte bound
+		// otherwise (#3069): a compaction's summary is exactly where a
+		// reply is large, and it is held in full, per in-flight request.
+		// Past wholeMost it fails as one that ended incomplete does —
+		// the model's doing, not the account's, so the next candidate is
+		// asked and nobody rests (gateway.go) — rather than the heap
+		// holding it for the request's life.
+		if h.held.Len() > wholeMost {
+			h.failure, h.failMsg = http.StatusBadGateway, incompleteReply+" (held whole past its bound)"
+			if h.stop != nil {
+				h.stop()
+			}
+		}
 		return
 	}
 	if h.alive.tooQuiet(0) {
