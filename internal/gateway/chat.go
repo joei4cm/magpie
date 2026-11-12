@@ -333,11 +333,15 @@ func responsesDetail(detail string) string {
 	return "auto"
 }
 
-func dataURL(p Part) string {
+// dataURL is p as the data: URL an upstream takes an inline image as: a
+// URL it came as is kept as it is, and a picture is its media type and its
+// bytes. The value is written into the body being built a piece at a time
+// (dataURLValue), so no URL of a whole turn's images is made first.
+func dataURL(p Part) dataURLValue {
 	if p.URL != "" && p.Data == "" {
-		return p.URL
+		return dataURLValue{head: p.URL}
 	}
-	return "data:" + p.MediaType + ";base64," + p.Data
+	return dataURLValue{head: "data:" + p.MediaType + ";base64,", data: p.Data}
 }
 
 // buildChat renders a request for a Chat Completions upstream.
