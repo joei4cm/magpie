@@ -27,15 +27,11 @@ func (s *Server) drawMuse(ctx context.Context, p provider.Provider, model string
 	if len(d.Images) > 0 {
 		parts := []map[string]any{{"type": "input_text", "text": d.Prompt}}
 		for _, pic := range d.Images {
-			u := pic.dataURL()
-			if pic.URL != "" {
-				u = pic.URL
-			}
-			parts = append(parts, map[string]any{"type": "input_image", "image_url": u})
+			parts = append(parts, map[string]any{"type": "input_image", "image_url": pic.dataURL()})
 		}
 		input = []map[string]any{{"role": "user", "content": parts}}
 	}
-	body, _ := json.Marshal(map[string]any{"model": model, "input": input, "store": false})
+	body, _ := marshalSized(map[string]any{"model": model, "input": input, "store": false})
 	url := strings.TrimRight(p.Base(provider.Responses), "/") + "/responses"
 	return s.eachDrawing(max(d.N, 1), func() (drawn, int, error) {
 		b, code, err := s.send(ctx, p, url, "application/json", body, true)

@@ -624,11 +624,15 @@ type picture struct {
 	URL  string // an image the vendor keeps, when it gave no bytes
 }
 
-func (p picture) dataURL() string {
+// dataURL is p as the data: URL an upstream takes it as: a URL it came as
+// is kept as it is, and a picture is its media type and its bytes. The
+// value is written into the body being built as it is encoded, so no URL
+// of the picture is made first (#6316).
+func (p picture) dataURL() pictureBase64 {
 	if p.URL != "" {
-		return p.URL
+		return pictureBase64{prefix: p.URL}
 	}
-	return "data:" + p.Mime + ";base64," + base64.StdEncoding.EncodeToString(p.Data)
+	return pictureBase64{prefix: "data:" + p.Mime + ";base64,", data: p.Data}
 }
 
 // drawing is one images request, whichever shape it came in.
@@ -1645,16 +1649,16 @@ func (s *Server) drawImages(ctx context.Context, p provider.Provider, model stri
 			req["aspect_ratio"] = ar
 		}
 		if len(d.Images) > 0 {
-			var imgs []map[string]string
+			var imgs []map[string]any
 			for _, pic := range d.Images {
-				imgs = append(imgs, map[string]string{"url": pic.dataURL(), "type": "image_url"})
+				imgs = append(imgs, map[string]any{"url": pic.dataURL(), "type": "image_url"})
 			}
 			req["images"] = imgs
 			ct, url = "application/json", base+"/images/edits"
 		} else {
 			ct, url = "application/json", base+"/images/generations"
 		}
-		body, _ = json.Marshal(req)
+		body, _ = marshalSized(req)
 	} else if len(d.Images) == 0 {
 		req := map[string]any{"model": model, "prompt": d.Prompt, "n": d.N}
 		fields := map[string]string{"size": d.Size, "quality": d.Quality, "background": d.Background, "output_format": d.Format}
@@ -1688,18 +1692,18 @@ func (s *Server) drawImages(ctx context.Context, p provider.Provider, model stri
 				req[k] = v
 			}
 		}
-		var imgs []map[string]string
+		var imgs []map[string]any
 		for _, pic := range d.Images {
-			imgs = append(imgs, map[string]string{"image_url": pic.dataURL()})
+			imgs = append(imgs, map[string]any{"image_url": pic.dataURL()})
 		}
 		req["images"] = imgs
 		if d.Mask != nil {
-			req["mask"] = map[string]string{"image_url": d.Mask.dataURL()}
+			req["mask"] = map[string]any{"image_url": d.Mask.dataURL()}
 		}
 		if d.Markup != nil {
-			req["markup"] = map[string]string{"image_url": d.Markup.dataURL()}
+			req["markup"] = map[string]any{"image_url": d.Markup.dataURL()}
 		}
-		body, _ = json.Marshal(req)
+		body, _ = marshalSized(req)
 		ct, url = "application/json", base+"/images/edits"
 	} else {
 		var buf bytes.Buffer
@@ -1779,11 +1783,11 @@ func (s *Server) drawOpenRouterImages(ctx context.Context, p provider.Provider, 
 	if len(d.Images) > 0 {
 		refs := make([]map[string]any, 0, len(d.Images))
 		for _, pic := range d.Images {
-			refs = append(refs, map[string]any{"type": "image_url", "image_url": map[string]string{"url": pic.dataURL()}})
+			refs = append(refs, map[string]any{"type": "image_url", "image_url": map[string]any{"url": pic.dataURL()}})
 		}
 		req["input_references"] = refs
 	}
-	body, _ := json.Marshal(req)
+	body, _ := marshalSized(req)
 	url := strings.TrimRight(p.Base(provider.Chat), "/") + "/images"
 	b, code, err := s.send(ctx, p, url, "application/json", body, true)
 	if err != nil {
@@ -2017,14 +2021,14 @@ func drawPrompt(d drawing) string {
 func (s *Server) drawChat(ctx context.Context, p provider.Provider, model string, d drawing) (drawn, int, error) {
 	content := []map[string]any{{"type": "text", "text": drawPrompt(d)}}
 	for _, pic := range d.Images {
-		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]string{"url": pic.dataURL()}})
+		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]any{"url": pic.dataURL()}})
 	}
 	req := map[string]any{"model": model, "stream": false, "modalities": []string{"image", "text"},
 		"messages": []map[string]any{{"role": "user", "content": content}}}
 	if r := aspectOf(d.Size); r != "" {
 		req["image_config"] = map[string]string{"aspect_ratio": r}
 	}
-	body, _ := json.Marshal(req)
+	body, _ := marshalSized(req)
 	url := strings.TrimRight(p.Base(provider.Chat), "/") + "/chat/completions"
 	return s.eachDrawing(d.N, func() (drawn, int, error) {
 		b, code, err := s.send(ctx, p, url, "application/json", p.Prepare(body), true)
@@ -2116,13 +2120,13 @@ func (s *Server) drawGemini(ctx context.Context, p provider.Provider, model stri
 			}
 			pic = picture{Mime: mt, Data: b}
 		}
-		parts = append(parts, map[string]any{"inlineData": map[string]string{"mimeType": pic.Mime, "data": base64.StdEncoding.EncodeToString(pic.Data)}})
+		parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": pic.Mime, "data": pictureBase64{data: pic.Data}}})
 	}
 	cfg := map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}}
 	if c := imageConfigOf(model, d.Size); c != nil {
 		cfg["imageConfig"] = c
 	}
-	body, _ := json.Marshal(map[string]any{"contents": []map[string]any{{"role": "user", "parts": parts}}, "generationConfig": cfg})
+	body, _ := marshalSized(map[string]any{"contents": []map[string]any{{"role": "user", "parts": parts}}, "generationConfig": cfg})
 	base := strings.TrimSuffix(strings.TrimRight(p.Base(provider.Chat), "/"), "/openai")
 	url := base + "/models/" + model + ":generateContent"
 	return s.eachDrawing(d.N, func() (drawn, int, error) {

@@ -26,7 +26,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -129,13 +128,13 @@ func arkBody(model string, d drawing) ([]byte, error) {
 	case 1:
 		req["image"] = d.Images[0].dataURL()
 	default:
-		var urls []string
+		var urls []any
 		for _, pic := range d.Images {
 			urls = append(urls, pic.dataURL())
 		}
 		req["image"] = urls
 	}
-	return json.Marshal(req)
+	return marshalSized(req)
 }
 
 // drawArk asks Ark's images API once for each of d's images.

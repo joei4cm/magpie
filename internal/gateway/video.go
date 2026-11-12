@@ -711,7 +711,7 @@ func volcengineVideoBody(model string, f filming) []byte {
 		content = append([]any{map[string]any{"type": "text", "text": f.Prompt}}, content...)
 	}
 	frame := func(pic *picture, role string) {
-		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]string{"url": pic.dataURL()}, "role": role})
+		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]any{"url": pic.dataURL()}, "role": role})
 	}
 	if f.Start != nil {
 		frame(f.Start, "first_frame")
@@ -739,7 +739,7 @@ func volcengineVideoBody(model string, f filming) []byte {
 	if res != "" {
 		set("resolution", res)
 	}
-	b, _ := json.Marshal(req)
+	b, _ := marshalSized(req)
 	return b
 }
 
@@ -763,16 +763,16 @@ func grokVideoBody(model string, f filming) ([]byte, error) {
 		req["resolution"] = res
 	}
 	if f.Start != nil {
-		req["image"] = map[string]string{"url": f.Start.dataURL()}
+		req["image"] = map[string]any{"url": f.Start.dataURL()}
 	}
 	if len(f.References) > 0 {
-		var refs []map[string]string
+		var refs []map[string]any
 		for _, pic := range f.References {
-			refs = append(refs, map[string]string{"url": pic.dataURL()})
+			refs = append(refs, map[string]any{"url": pic.dataURL()})
 		}
 		req["reference_images"] = refs
 	}
-	return json.Marshal(req)
+	return marshalSized(req)
 }
 
 // videoID is the id of a video p is making for vendorID, started at t. It
@@ -969,14 +969,14 @@ func remoteVideoBody(model string, f filming) []byte {
 	if f.End != nil {
 		req["last_frame"] = f.End.dataURL()
 	}
-	var refs []string
+	var refs []any
 	for _, pic := range f.References {
 		refs = append(refs, pic.dataURL())
 	}
 	if len(refs) > 0 {
 		req["reference_images"] = refs
 	}
-	b, _ := json.Marshal(req)
+	b, _ := marshalSized(req)
 	return b
 }
 

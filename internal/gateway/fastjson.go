@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -1737,6 +1738,8 @@ func jsonSize(v any) (int, bool) {
 		return 4, true
 	case dataURLValue:
 		return 2 + jsonStringContentSize(v.head) + jsonStringContentSize(v.data), true
+	case pictureBase64:
+		return 2 + jsonStringContentSize(v.prefix) + base64.StdEncoding.EncodedLen(len(v.data)), true
 	case string:
 		return jsonStringSize(v), true
 	case bool:
@@ -1827,6 +1830,11 @@ func appendJSONValue(dst []byte, v any) ([]byte, error) {
 		dst = append(dst, '"')
 		dst = appendJSONStringContent(dst, v.head)
 		dst = appendJSONStringContent(dst, v.data)
+		return append(dst, '"'), nil
+	case pictureBase64:
+		dst = append(dst, '"')
+		dst = appendJSONStringContent(dst, v.prefix)
+		dst = base64.StdEncoding.AppendEncode(dst, v.data)
 		return append(dst, '"'), nil
 	case string:
 		return appendJSONString(dst, v), nil
@@ -1943,6 +1951,29 @@ func (v dataURLValue) MarshalJSON() ([]byte, error) {
 	dst = append(dst, '"')
 	dst = appendJSONStringContent(dst, v.head)
 	dst = appendJSONStringContent(dst, v.data)
+	return append(dst, '"'), nil
+}
+
+// pictureBase64 is a picture's bytes as the base64 an upstream takes them
+// as, written straight into the body being built: the base64 is encoded
+// into the body's bytes as they are written, so the picture is not encoded
+// into a string of its own first and the body does not copy that string in
+// again (#6316). prefix is written before the base64 — "data:image/png;
+// base64," for a data URL, nothing for a vendor's own shape.
+type pictureBase64 struct {
+	prefix string
+	data   []byte
+}
+
+// MarshalJSON is the base64 as encoding/json writes it, for the callers
+// that hand a body to encoding/json itself; the body's writer uses jsonSize
+// and appendJSONValue, which encode the picture into the body as it is
+// written.
+func (v pictureBase64) MarshalJSON() ([]byte, error) {
+	dst := make([]byte, 0, 2+jsonStringContentSize(v.prefix)+base64.StdEncoding.EncodedLen(len(v.data)))
+	dst = append(dst, '"')
+	dst = appendJSONStringContent(dst, v.prefix)
+	dst = base64.StdEncoding.AppendEncode(dst, v.data)
 	return append(dst, '"'), nil
 }
 

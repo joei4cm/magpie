@@ -43,13 +43,13 @@ func (s *Server) drawModelScope(ctx context.Context, p provider.Provider, model 
 		req["size"] = d.Size
 	}
 	if len(d.Images) > 0 { // its edit models take the images by URL
-		var urls []string
+		var urls []any
 		for _, pic := range d.Images {
 			urls = append(urls, pic.dataURL())
 		}
 		req["image_url"] = urls
 	}
-	body, _ := json.Marshal(req)
+	body, _ := marshalSized(req)
 	q, _ := modelScopeQueues.LoadOrStore(p.ID+"\x00"+p.Key, &sync.Mutex{})
 	mu := q.(*sync.Mutex)
 	var out drawn

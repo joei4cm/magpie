@@ -138,13 +138,13 @@ func minimaxH3Body(model string, d drawing) ([]byte, string, error) {
 	path := "/v1/images/generations"
 	if len(d.Images) > 0 {
 		path = "/v1/images/edits"
-		var imgs []map[string]string
+		var imgs []map[string]any
 		for _, pic := range d.Images {
-			imgs = append(imgs, map[string]string{"image_url": pic.dataURL()})
+			imgs = append(imgs, map[string]any{"image_url": pic.dataURL()})
 		}
 		req["images"] = imgs
 	}
-	b, err := json.Marshal(req)
+	b, err := marshalSized(req)
 	return b, path, err
 }
 
@@ -219,9 +219,9 @@ func minimaxDrawBody(model string, d drawing) ([]byte, error) {
 	}
 	if len(d.Images) > 0 {
 		// a portrait the image is drawn of: MiniMax's only kind of reference
-		var refs []map[string]string
+		var refs []map[string]any
 		for _, pic := range d.Images {
-			refs = append(refs, map[string]string{"type": "character", "image_file": pic.dataURL()})
+			refs = append(refs, map[string]any{"type": "character", "image_file": pic.dataURL()})
 		}
 		req["subject_reference"] = refs
 	}
@@ -231,7 +231,7 @@ func minimaxDrawBody(model string, d drawing) ([]byte, error) {
 			req[k] = v
 		}
 	}
-	return json.Marshal(req)
+	return marshalSized(req)
 }
 
 func (s *Server) drawMiniMax(ctx context.Context, p provider.Provider, model string, d drawing) (drawn, int, error) {

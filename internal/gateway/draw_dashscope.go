@@ -78,11 +78,11 @@ func dashScopeBody(model string, d drawing) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var content []map[string]string
+	var content []map[string]any
 	for _, pic := range d.Images {
-		content = append(content, map[string]string{"image": pic.dataURL()})
+		content = append(content, map[string]any{"image": pic.dataURL()})
 	}
-	content = append(content, map[string]string{"text": d.Prompt})
+	content = append(content, map[string]any{"text": d.Prompt})
 	params := map[string]any{"watermark": false}
 	if d.N > 1 {
 		params["n"] = d.N
@@ -90,7 +90,7 @@ func dashScopeBody(model string, d drawing) ([]byte, error) {
 	if size != "" {
 		params["size"] = size
 	}
-	return json.Marshal(map[string]any{
+	return marshalSized(map[string]any{
 		"model":      model,
 		"input":      map[string]any{"messages": []map[string]any{{"role": "user", "content": content}}},
 		"parameters": params,

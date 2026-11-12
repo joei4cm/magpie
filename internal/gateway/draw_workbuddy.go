@@ -253,7 +253,7 @@ func (s *Server) drawWorkBuddy(ctx context.Context, p provider.Provider, model s
 	}
 	url := strings.TrimRight(p.Base(provider.Chat), "/") + "/images/generations"
 	if len(d.Images) > 0 {
-		var imgs []string
+		var imgs []any
 		for _, pic := range d.Images {
 			imgs = append(imgs, pic.dataURL())
 		}
@@ -263,7 +263,7 @@ func (s *Server) drawWorkBuddy(ctx context.Context, p provider.Provider, model s
 		}
 		url = strings.TrimRight(p.Base(provider.Chat), "/") + "/images/edits"
 	}
-	body, _ := json.Marshal(req)
+	body, _ := marshalSized(req)
 	b, code, err := s.send(ctx, p, url, "application/json", body, true)
 	if err != nil {
 		return drawn{}, code, err
