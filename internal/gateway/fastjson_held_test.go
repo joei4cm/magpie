@@ -91,6 +91,63 @@ func TestRequestBodyRawValuesShareIt(t *testing.T) {
 	}
 }
 
+// sharesString says whether s's bytes lie inside whole's.
+func sharesString(s string, whole []byte) bool {
+	p := uintptr(unsafe.Pointer(unsafe.StringData(s)))
+	b := uintptr(unsafe.Pointer(unsafe.SliceData(whole)))
+	return len(s) > 0 && p >= b && p+uintptr(len(s)) <= b+uintptr(len(whole))
+}
+
+// A large string of a body being served is the body's own bytes: an image
+// turn's pictures are most of its body, and unquoteJSON copied each of them
+// once more to be read (#5748). A small one is still copied — it would keep
+// the whole body alive if it were kept — and a body whose request ended is
+// not shared either.
+func TestHeldBodySharesItsLargeStrings(t *testing.T) {
+	before := heldCount()
+	big, small := strings.Repeat("a", heldShareLeast), "a short string"
+	sent := []byte(`{"model":"m","messages":[{"role":"user","content":"` + big + `"},{"role":"user","content":"` + small + `"}]}`)
+	ctx, done := context.WithCancel(context.Background())
+	r := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(sent)).WithContext(ctx)
+	body, ok := (&Server{}).readRequestBody(httptest.NewRecorder(), r, provider.Chat, 0)
+	if !ok {
+		t.Fatal("body not read")
+	}
+	var q struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := decodeJSON(body, &q); err != nil || len(q.Messages) != 2 {
+		t.Fatalf("decode: %v, %d messages", err, len(q.Messages))
+	}
+	if q.Messages[0].Content != big || q.Messages[1].Content != small {
+		t.Fatal("the strings decoded are not the strings sent")
+	}
+	if !sharesString(q.Messages[0].Content, body) {
+		t.Fatal("a large string decoded from the request's body while it is served is a copy of it")
+	}
+	if sharesString(q.Messages[1].Content, body) {
+		t.Fatal("a small string shares the body, which it would keep alive if kept")
+	}
+
+	done()
+	for deadline := time.Now().Add(5 * time.Second); heldCount() > before; {
+		if time.Now().After(deadline) {
+			t.Fatal("the body is still held after its request ended")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var again struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := decodeJSON(body, &again); err != nil || sharesString(again.Messages[0].Content, body) {
+		t.Fatalf("a body whose request ended is still shared (%v)", err)
+	}
+}
+
 // Only a request's own body is shared: bytes decodeJSON is handed from
 // anywhere else — a buffer a stream fills again — are copied, so a raw
 // value outlives what is written over them.
