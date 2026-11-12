@@ -114,7 +114,7 @@ func minimaxVideoBody(model string, f filming) ([]byte, error) {
 	}
 	content := []map[string]any{{"type": "text", "text": f.Prompt}}
 	add := func(pic picture, role string) {
-		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]string{"url": pic.dataURL()}, "role": role})
+		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]any{"url": pic.dataURL()}, "role": role})
 	}
 	if f.Start != nil {
 		add(*f.Start, "first_frame")
@@ -148,7 +148,7 @@ func minimaxVideoBody(model string, f filming) ([]byte, error) {
 	if extra, ok := f.Extra["extra"].(map[string]any); ok && model == "MiniMax-H3-Max" {
 		req["extra"] = extra
 	}
-	return json.Marshal(req)
+	return marshalSized(req)
 }
 
 // minimaxResolution is the resolution a video is asked for: the caller's

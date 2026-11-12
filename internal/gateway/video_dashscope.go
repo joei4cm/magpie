@@ -75,9 +75,9 @@ func dashScopeVideoBody(model string, f filming) ([]byte, error) {
 			params[k] = v
 		}
 	}
-	var media []map[string]string
+	var media []map[string]any
 	add := func(pic picture, kind string) {
-		media = append(media, map[string]string{"type": kind, "url": pic.dataURL()})
+		media = append(media, map[string]any{"type": kind, "url": pic.dataURL()})
 	}
 	if f.Start != nil {
 		add(*f.Start, "first_frame")
@@ -117,7 +117,7 @@ func dashScopeVideoBody(model string, f filming) ([]byte, error) {
 	if _, ok := params["watermark"]; !ok {
 		params["watermark"] = false
 	}
-	return json.Marshal(map[string]any{"model": model, "input": input, "parameters": params})
+	return marshalSized(map[string]any{"model": model, "input": input, "parameters": params})
 }
 
 // dashScopeVideoURL is where p starts a video.
