@@ -70,6 +70,28 @@ func TestRequestBodyReadOnceAtItsLength(t *testing.T) {
 	}
 }
 
+// A declaration within sizedReadOnce is set aside whole: the room for what
+// was declared is taken for the request before the read either way, so a
+// 20 MiB image turn no longer reads 1+2+4+8+16+20 MiB to be read at all
+// (#5748). The same bytes declared past it still grow, and cost the copies
+// back, which is what the bound above is about.
+func TestRequestBodyDeclaredUnderSizedReadOnceReadsOnce(t *testing.T) {
+	sent := bytes.Repeat([]byte("0123456789abcdef"), 3<<20/16) // 3 MB
+	var got []byte
+	var err error
+	once := allocated(func() { got, err = readSized(&chunked{sent, 64 << 10}, int64(len(sent))) })
+	if err != nil || !bytes.Equal(got, sent) || cap(got) != len(got) {
+		t.Fatalf("read %d bytes (cap %d), %v", len(got), cap(got), err)
+	}
+	if limit := uint64(len(sent)) * 3 / 2; once > limit {
+		t.Fatalf("a %d-byte body declared as %d allocated %d bytes to read", len(sent), len(sent), once)
+	}
+	grew := allocated(func() { readSized(&chunked{sent, 64 << 10}, sizedReadOnce+int64(len(sent))) })
+	if grew < uint64(len(sent))*2 {
+		t.Fatalf("the same body declared past sizedReadOnce allocated only %d bytes: the check above shows nothing", grew)
+	}
+}
+
 // A body a little over a doubling of the first slice is not copied whole
 // again for its last bytes: a Codex turn of 516 MB of generated images was
 // read into 1+2+…+512 MB and then all of it into 516 MB, 1.5 GB allocated
