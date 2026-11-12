@@ -197,3 +197,80 @@ func TestRequestDiskRowsWrittenOnce(t *testing.T) {
 		t.Fatalf("the file was written again for 4 rows")
 	}
 }
+
+// The file of the chunks is written for requestDiskLeast different sources
+// made since the last write, not for that many makes of one: a session
+// still at work is made again for each call, and rewriting the whole file
+// for it wrote 97 MB in 96 seconds on a 24 MB cache (#4276).
+func TestRequestDiskSameSourceNotWrittenAgain(t *testing.T) {
+	pageHome(t)
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	least, rows := requestDiskLeast, requestDiskLeastRows
+	requestDiskLeast, requestDiskLeastRows = 2, 1<<30
+	t.Cleanup(func() { requestDiskLeast, requestDiskLeastRows = least, rows })
+	requestCache.Lock()
+	requestCache.dirty = nil
+	requestCache.unsavedRows = 0
+	requestCache.savedRows = false
+	requestCache.Unlock()
+	var saves atomic.Int32
+	savingDisk = func() { saves.Add(1) }
+	t.Cleanup(func() { savingDisk = nil })
+	dir := filepath.Join(sessions.CodexDir(), "sessions", "2026", "09", "30")
+	rollout := func(i int) string {
+		return filepath.Join(dir, fmt.Sprintf("rollout-2026-09-30T10-00-0%d-s%d.jsonl", i, i))
+	}
+	write := func(i, input int) {
+		writeCodexCall(t, rollout(i), fmt.Sprintf("s%d", i), fmt.Sprintf("native-%d", i), `"cli"`, fmt.Sprintf("resp-%d", i), "m", "high", now.Add(-time.Duration(i+1)*time.Hour), input, i)
+	}
+	write(0, 10)
+	write(1, 10)
+	page := func() RequestPage {
+		t.Helper()
+		got := queryPage(All, Filter{}, 0, 100, sessions.ReadCallSource)
+		requestDiskSaves.Wait()
+		return got
+	}
+	if p := page(); p.Total != 2 {
+		t.Fatalf("first page: %d rows, want 2", p.Total)
+	}
+	first := saves.Load()
+	if first == 0 {
+		t.Fatal("2 sources made, and the file of them was never written")
+	}
+	saved, err := os.ReadFile(requestDiskPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// one of the two made again, twice over: two makes of one source are
+	// still one source since the last write
+	for i := 0; i < 2; i++ {
+		write(0, 20+i)
+		later := time.Now().Add(time.Duration(i+1) * time.Minute)
+		if err := os.Chtimes(rollout(0), later, later); err != nil {
+			t.Fatal(err)
+		}
+		if p := page(); p.Sum.Input != 30+i {
+			t.Fatalf("made again: %d input, want %d", p.Sum.Input, 30+i)
+		}
+	}
+	if n := saves.Load(); n != first {
+		t.Fatalf("one source made again: %d writes of the file, want %d still: a make of one source is not a second source", n, first)
+	}
+	if b, _ := os.ReadFile(requestDiskPath()); string(b) != string(saved) {
+		t.Fatal("the file was written again for one source's makes")
+	}
+	// the other source made again: two different sources since the last
+	// write, which is what the file is written for
+	write(1, 20)
+	at := time.Now().Add(5 * time.Minute)
+	if err := os.Chtimes(rollout(1), at, at); err != nil {
+		t.Fatal(err)
+	}
+	if p := page(); p.Sum.Input != 41 {
+		t.Fatalf("second source: %d input, want 41", p.Sum.Input)
+	}
+	if n := saves.Load(); n <= first {
+		t.Fatalf("2 different sources made: %d writes of the file, want more than %d", n, first)
+	}
+}
