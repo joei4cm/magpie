@@ -44,7 +44,7 @@ type spawnChoice struct{ slug, name string }
 // spawn_agent tool naming every model of the catalog that Codex was handed
 // there, not only the first five. lead is the request's model.
 func spawnAgentModels(r *http.Request, body []byte, lead string, codexPath bool) []byte {
-	listed := bodyHas(body, `"spawn_agent"`) && bodyHas(body, "Available model overrides")
+	listed := bodyHas(body, markerSpawnAgent) && bodyHas(body, "Available model overrides")
 	if !listed && !hasSpawnCatalog(body) {
 		return body
 	}

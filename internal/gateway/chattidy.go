@@ -1033,11 +1033,11 @@ func withoutMessageReasoning(body []byte, fields []string) []byte {
 // return, and a changed body is marshalled anew. A copy of each level
 // was ~3.8 MB a request for a 2 MB Chat conversation.
 func editMessages(body []byte, fields []string, edit func(m map[string]json.RawMessage) bool) []byte {
-	has := false
+	needles := make([]string, 0, len(fields))
 	for _, f := range fields {
-		has = has || bodyHas(body, `"`+f+`"`)
+		needles = append(needles, `"`+f+`"`)
 	}
-	if !has {
+	if !bodyHasAny(body, needles...) {
 		return body
 	}
 	var q map[string]json.RawMessage

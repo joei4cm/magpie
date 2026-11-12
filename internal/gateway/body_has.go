@@ -6,17 +6,14 @@ import (
 	"unsafe"
 )
 
-// bodyHas is bytes.Contains(b, sep) for the request path's many "is this
-// key in the body at all" checks. Most of their needles begin with a
-// quote, the commonest byte in JSON: bytes.Index stops at every quote,
-// soon gives up on that, and compares at every byte of the body, ~45
-// times a request. A 2 MB body spent ~9 ms a request there, a third of
-// the gateway's CPU (BenchmarkLargeRequest). bodyHas looks for the
-// needle's rarest byte instead, which the CPU finds many bytes at a
-// time, and compares the needle only where that byte is.
-func bodyHas(b []byte, sep string) bool { return bodyIndex(b, sep) >= 0 }
-
-// bodyIndex is bytes.Index(b, sep), found as bodyHas finds it.
+// bodyIndex is bytes.Index(b, sep) for the request path's many "is this
+// key in the body at all" checks (bodyHas, bodyHasBytes). Most of their
+// needles begin with a quote, the commonest byte in JSON: bytes.Index
+// stops at every quote, soon gives up on that, and compares at every byte
+// of the body, ~45 times a request. A 2 MB body spent ~9 ms a request
+// there, a third of the gateway's CPU (BenchmarkLargeRequest). bodyIndex
+// looks for the needle's rarest byte instead, which the CPU finds many
+// bytes at a time, and compares the needle only where that byte is.
 func bodyIndex(b []byte, sep string) int {
 	if len(sep) < 2 || len(b) < 1024 {
 		return indexStr(b, sep)

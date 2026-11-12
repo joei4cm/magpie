@@ -244,7 +244,7 @@ func isUserItem(raw json.RawMessage) bool {
 // effortUpdated is the effort the last configuration_update in a Responses
 // request's input asks for: "" with none.
 func effortUpdated(body []byte) string {
-	if !bodyHas(body, `"configuration_update"`) {
+	if !bodyHas(body, markerConfigUpdate) {
 		return ""
 	}
 	e := ""
@@ -278,7 +278,7 @@ func updateEffort(it []byte) string {
 // that reads the items isn't asked another by them, and the thread's
 // prefix stays as it was. The body as it is when it has none.
 func withEffortUpdated(body []byte, effort string) []byte {
-	if !bodyHas(body, `"configuration_update"`) {
+	if !bodyHas(body, markerConfigUpdate) {
 		return body
 	}
 	q, err := rawObject(body)

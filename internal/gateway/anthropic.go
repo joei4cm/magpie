@@ -419,7 +419,7 @@ func anthropicReplaysThinking(host, model string) bool {
 // group that falls from Claude to DeepSeek sends both (#1611). Every other
 // message, and a body with nothing to change, goes byte for byte.
 func withThinkingOnToolTurns(body []byte) []byte {
-	if !bodyHas(body, `"tool_use"`) && !bodyHas(body, `"redacted_thinking"`) {
+	if !bodyHasAny(body, `"tool_use"`, `"redacted_thinking"`) {
 		return body
 	}
 	var q map[string]json.RawMessage

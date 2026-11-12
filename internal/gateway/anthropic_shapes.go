@@ -187,7 +187,7 @@ func (s *Server) withoutRefusedShapes(p provider.Provider, body []byte) []byte {
 	if !s.fits(p.ID, shapeSafeguards, provider.Anthropic) && gjson.GetBytes(body, "safeguards").Exists() {
 		body = withoutFields(body, "safeguards")
 	}
-	if !bodyHas(body, `"display"`) && !bodyHas(body, `"output_config"`) {
+	if !bodyHasAny(body, `"display"`, `"output_config"`) {
 		return body
 	}
 	if d := gjson.GetBytes(body, "thinking.display"); d.Exists() {
@@ -387,7 +387,7 @@ func deferredBlock(typ string) bool {
 // blocks refuses there too (#5404). A tool_reference inside a tool_result
 // (ToolSearch's older answer) is not one.
 func hasDeferredTools(body []byte) bool {
-	if !bodyHas(body, `"tool_addition"`) && !bodyHas(body, `"tool_removal"`) && !bodyHas(body, `"tool_reference"`) && !bodyHas(body, `"tool_definition"`) {
+	if !bodyHasAny(body, `"tool_addition"`, `"tool_removal"`, `"tool_reference"`, `"tool_definition"`) {
 		return false
 	}
 	found := false
