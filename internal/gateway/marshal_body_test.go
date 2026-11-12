@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"runtime"
@@ -112,6 +113,76 @@ func (p *spentProbe) MarshalJSON() ([]byte, error) {
 // a 45 MiB Codex conversation's messages, strings joined from its parts
 // among them, were a copy more at the body's peak (#4004). A list not
 // named spent is left as it was.
+// A data URL is written into the body a piece at a time, not made as one
+// string first and copied in again: on an image turn the URLs are most of
+// the body, so a 20 MiB request copied them twice more (#5748). The bytes
+// are encoding/json's either way — through the body's writer, through
+// encoding/json itself, and for every way of keeping a list's items.
+func TestDataURLValueIsJSONMarshalOfTheURL(t *testing.T) {
+	url := func(p Part) string {
+		if p.URL != "" && p.Data == "" {
+			return p.URL
+		}
+		return "data:" + p.MediaType + ";base64," + p.Data
+	}
+	parts := []Part{
+		{Kind: Image, MediaType: "image/png", Data: "AAAA"},
+		{Kind: Image, MediaType: "image/jpeg", Data: `a"b\c` + "\n"},  // not base64: it escapes
+		{Kind: Image, MediaType: "image/png", Data: "h\u00e9llo <&>"}, // not ASCII, and HTML's own
+		{Kind: Image, MediaType: "image/png", Data: "a\u2028b"},       // U+2028, escaped either way
+		{Kind: Image, URL: "https://example.com/a.png?x=1&y=2"},       // a URL as it came
+		{Kind: Image, MediaType: "", Data: ""},                        // nothing to say it with
+	}
+	for _, p := range parts {
+		v, want := dataURL(p), url(p)
+		body := func() map[string]any {
+			return map[string]any{"type": "image_url", "image_url": map[string]any{"url": v, "detail": "auto"}}
+		}
+		wantBody, err := json.Marshal(map[string]any{"type": "image_url", "image_url": map[string]any{"url": want, "detail": "auto"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantJSON, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := json.Marshal(v); err != nil || !bytes.Equal(got, wantJSON) {
+			t.Errorf("json.Marshal(%q): got %s (%v), want %s", want, got, err, wantJSON)
+		}
+		n, ok := jsonSize(v)
+		got, err := appendJSONValue(nil, v)
+		if !ok || err != nil || n != len(got) || !bytes.Equal(got, wantJSON) {
+			t.Errorf("appendJSONValue(%q): %d measured, %s (%v), want %d %s", want, n, got, err, len(wantJSON), wantJSON)
+		}
+		t.Cleanup(func() { bodyKept = 4 << 20 })
+		for _, kept := range []int{4 << 20, 0, 1} {
+			bodyKept = kept
+			if got, err := marshalBody(body(), ""); err != nil || !bytes.Equal(got, wantBody) {
+				t.Errorf("kept %d, marshalBody(%q): got %s (%v), want %s", kept, want, got, err, wantBody)
+			}
+		}
+	}
+}
+
+// No URL of a turn's images is made first: an item's bytes are written
+// where the picture's are read from. The URL was one string first, and the
+// item's writer copied it in again, so a 2 MiB picture cost its URL and the
+// bytes holding it — twice its size for one image, and a turn's images are
+// most of its body (#5748).
+func TestDataURLValueMakesNoURLFirst(t *testing.T) {
+	if raceOn {
+		t.Skip("under -race the pool the body's writer uses lets a quarter of what is put in it go, so every item allocates afresh")
+	}
+	p := Part{Kind: Image, MediaType: "image/png", Data: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("A"), 2<<20))}
+	url := "data:" + p.MediaType + ";base64," + p.Data
+	write := allocated(func() {
+		marshalSized(map[string]any{"url": dataURL(p)})
+	})
+	if limit := uint64(len(url)) * 3 / 2; write > limit {
+		t.Fatalf("a %d-byte URL written as an item allocated %d bytes: the URL is still made first", len(url), write)
+	}
+}
+
 func TestMarshalBodyLetsSpentGo(t *testing.T) {
 	var held []int
 	list := make([]*spentProbe, 5)

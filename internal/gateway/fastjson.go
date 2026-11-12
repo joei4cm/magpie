@@ -1735,6 +1735,8 @@ func jsonSize(v any) (int, bool) {
 	switch v := v.(type) {
 	case nil:
 		return 4, true
+	case dataURLValue:
+		return 2 + jsonStringContentSize(v.head) + jsonStringContentSize(v.data), true
 	case string:
 		return jsonStringSize(v), true
 	case bool:
@@ -1821,6 +1823,11 @@ func appendJSONValue(dst []byte, v any) ([]byte, error) {
 	switch v := v.(type) {
 	case nil:
 		return append(dst, "null"...), nil
+	case dataURLValue:
+		dst = append(dst, '"')
+		dst = appendJSONStringContent(dst, v.head)
+		dst = appendJSONStringContent(dst, v.data)
+		return append(dst, '"'), nil
 	case string:
 		return appendJSONString(dst, v), nil
 	case bool:
@@ -1917,6 +1924,28 @@ func appendMarshalled(dst []byte, v any) ([]byte, error) {
 	return append(dst, b...), nil
 }
 
+// dataURLValue is an image as the data: URL an upstream takes it as, written
+// straight into the body being built. dataURL made the URL as one string
+// first and the body's writer copied it in again: on an image turn the URLs
+// are most of the body, so a 20 MiB request copied them twice more (#5748).
+// head is written first and data after it — "data:image/png;base64," and the
+// picture's bytes, or a URL as it came with nothing after it.
+type dataURLValue struct {
+	head, data string
+}
+
+// MarshalJSON is the URL as encoding/json writes it, for the callers that
+// hand a body to encoding/json itself (marshalPlain's fallback,
+// appendMarshalled); the body's writer uses jsonSize and appendJSONValue,
+// which make no string of it at all.
+func (v dataURLValue) MarshalJSON() ([]byte, error) {
+	dst := make([]byte, 0, 2+jsonStringContentSize(v.head)+jsonStringContentSize(v.data))
+	dst = append(dst, '"')
+	dst = appendJSONStringContent(dst, v.head)
+	dst = appendJSONStringContent(dst, v.data)
+	return append(dst, '"'), nil
+}
+
 // plainJSONKey is a key json.Marshal writes as it is, between quotes.
 func plainJSONKey(k string) bool {
 	for i := 0; i < len(k); i++ {
@@ -1929,7 +1958,15 @@ func plainJSONKey(k string) bool {
 
 // jsonStringSize is how long json.Marshal(s) is.
 func jsonStringSize(s string) int {
-	n := 2
+	return jsonStringContentSize(s) + 2
+}
+
+// jsonStringContentSize is how long what s holds is as encoding/json writes
+// it, its quotes left out: a value written a piece at a time — a data URL's
+// head and the picture after it — comes to the same length as the whole
+// string does.
+func jsonStringContentSize(s string) int {
+	n := 0
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c < utf8.RuneSelf {
@@ -1959,8 +1996,16 @@ func jsonStringSize(s string) int {
 // characters escaped: invalid UTF-8 as \ufffd, and U+2028 and U+2029
 // escaped.
 func appendJSONString(dst []byte, s string) []byte {
-	const hex = "0123456789abcdef"
 	dst = append(dst, '"')
+	dst = appendJSONStringContent(dst, s)
+	return append(dst, '"')
+}
+
+// appendJSONStringContent appends what s holds as appendJSONString writes
+// it, its quotes left out: a value written a piece at a time \u2014 a data URL's
+// head and the picture after it \u2014 escapes as the whole string does.
+func appendJSONStringContent(dst []byte, s string) []byte {
+	const hex = "0123456789abcdef"
 	start := 0
 	for i := 0; i < len(s); {
 		c := s[i]
@@ -2007,8 +2052,7 @@ func appendJSONString(dst []byte, s string) []byte {
 		}
 		i += size
 	}
-	dst = append(dst, s[start:]...)
-	return append(dst, '"')
+	return append(dst, s[start:]...)
 }
 
 // bodyKept is how many bytes of a body's written items marshalBody keeps
