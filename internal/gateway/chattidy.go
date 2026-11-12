@@ -893,7 +893,7 @@ func asReasoningContent(m map[string]json.RawMessage, think string) {
 // reasoning_content alone) and sends it again on every later turn. A body
 // without such a turn comes back byte for byte.
 func silentAssistantsOut(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"assistant"`)) {
+	if !bodyHas(body, markerAssistant) {
 		return body
 	}
 	var q map[string]json.RawMessage
@@ -1143,7 +1143,7 @@ func mistralThinking(body []byte) []byte {
 // join into one first, as joinSplitCalls does for the translations. A
 // body whose exchange pairs comes back byte for byte.
 func toolPairsOut(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"tool`)) {
+	if !bodyHas(body, markerTool) {
 		return body
 	}
 	var q map[string]json.RawMessage

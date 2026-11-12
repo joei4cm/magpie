@@ -1017,7 +1017,7 @@ func small(body []byte) bool {
 // hasTools: the request offers the model tools (Anthropic's, Chat's and
 // Responses' "tools" alike).
 func hasTools(body []byte) bool {
-	if !bytes.Contains(body, []byte(`"tools"`)) {
+	if !bodyHas(body, markerTools) {
 		return false
 	}
 	var v struct {

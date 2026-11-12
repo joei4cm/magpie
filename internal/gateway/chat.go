@@ -980,7 +980,7 @@ func geminiCompat(host, model string) bool {
 // thinking's type, and where the gateway and every other Chat API read it.
 // A request that says reasoning_effort itself is left as it is.
 func thinkingEffort(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"effort"`)) {
+	if !bodyHas(body, markerEffort) {
 		return body
 	}
 	var v struct {
@@ -1004,7 +1004,7 @@ func thinkingEffort(body []byte) []byte {
 // for every route, and no field an upstream doesn't know. A
 // prompt_cache_key the body has already is the one kept.
 func cacheKeyCamel(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"promptCacheKey"`)) {
+	if !bodyHas(body, markerCacheKey) {
 		return body
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))

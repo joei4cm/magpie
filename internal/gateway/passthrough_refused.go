@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"strconv"
 
@@ -130,7 +129,10 @@ func withoutPassthroughIf(body []byte, drop func(field string) bool) ([]byte, bo
 // withoutRefusedPassthrough is body without the passthrough members
 // providerID turned away before.
 func (s *Server) withoutRefusedPassthrough(providerID string, proto provider.Protocol, body []byte) []byte {
-	if proto != provider.Responses || !bytes.Contains(body, []byte(passthroughKey)) {
+	// the passthrough is a member of the request, so its name is in the
+	// body quoted: the check is for the quoted name, and the work after
+	// it leaves a body without such a member as it came
+	if proto != provider.Responses || !bodyHas(body, markerChatMetadata) {
 		return body
 	}
 	if !s.fits(providerID, passthroughRefused(""), proto) {

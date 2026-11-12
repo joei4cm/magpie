@@ -3032,7 +3032,7 @@ func refusesReasoningText(status int, b, body []byte) bool {
 // than its text, so the item goes, as codexInput leaves it out for one of
 // Codex's own models.
 func withoutReasoningText(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"reasoning"`)) || !anyInputItem(body, func(it []byte) bool {
+	if !bodyHas(body, markerReasoning) || !anyInputItem(body, func(it []byte) bool {
 		r := reasoningOf(it)
 		return r.typeOK && r.contentOK && r.reasoning && r.text
 	}) {
@@ -3380,7 +3380,7 @@ var itemKindPrefix = map[string]string{
 // with each other character as "_"; a call's call_id, which its output
 // names it by, stays as it was.
 func plainItemIDs(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"id"`)) {
+	if !bodyHas(body, markerID) {
 		return body
 	}
 	if !anyInputItem(body, func(it []byte) bool {
@@ -3630,7 +3630,7 @@ func keepsAccessPrograms(p provider.Provider, in http.Header) bool {
 // withoutAccessPrograms is body without its top-level access_programs, the
 // rest byte for byte (withoutTopMember).
 func withoutAccessPrograms(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"access_programs"`)) {
+	if !bodyHas(body, markerAccessPrograms) {
 		return body
 	}
 	return withoutTopMember(body, "access_programs")
