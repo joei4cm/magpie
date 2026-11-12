@@ -97,6 +97,9 @@ var heldBodies struct {
 	facts map[*byte]heldFacts
 	// long: what longBody found of a held body, by its first byte
 	long map[*byte]heldLong
+	// markers: which of the gateway's markers a held body holds, by its
+	// first byte (heldMarkerBits)
+	markers map[*byte]heldMarkers
 }
 
 // heldLong is what longBody found of a held body: valid or not, and its
@@ -105,6 +108,13 @@ type heldLong struct {
 	n       int
 	valid   bool
 	members []memberSpan
+}
+
+// heldMarkers is which of the gateway's markers a held body holds.
+type heldMarkers struct {
+	n int // the body's length, so a released body's memory reused by
+	// another body isn't read as this one (heldLong)
+	bits uint64
 }
 
 // heldBodiesMost bounds heldBodies: a body past it is decoded with copies, as
@@ -155,6 +165,7 @@ func holdBody(ctx context.Context, body []byte) {
 		}
 		delete(heldBodies.facts, unsafe.SliceData(body))
 		delete(heldBodies.long, unsafe.SliceData(body))
+		delete(heldBodies.markers, unsafe.SliceData(body))
 		next := slices.Delete(slices.Clone(cur), i, i+1)
 		heldBodies.list.Store(&next)
 	})

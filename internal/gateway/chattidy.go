@@ -1030,11 +1030,11 @@ func withoutMessageReasoning(body []byte, fields []string) []byte {
 // other message keeps its bytes. The body comes back as it was if nothing
 // changed.
 func editMessages(body []byte, fields []string, edit func(m map[string]json.RawMessage) bool) []byte {
-	has := false
+	needles := make([]string, 0, len(fields))
 	for _, f := range fields {
-		has = has || bytes.Contains(body, []byte(`"`+f+`"`))
+		needles = append(needles, `"`+f+`"`)
 	}
-	if !has {
+	if !bodyHasAny(body, needles...) {
 		return body
 	}
 	var q map[string]json.RawMessage

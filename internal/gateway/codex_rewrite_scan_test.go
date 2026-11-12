@@ -637,7 +637,7 @@ func wasForVendor(p provider.Provider, body []byte) []byte {
 	if p.Account != nil && p.Account.Agent == "codex" || strings.HasSuffix(p.Host(), "openai.com") {
 		return body
 	}
-	if !slices.ContainsFunc(openaiOnly, func(k []byte) bool { return bytes.Contains(body, k) }) {
+	if !slices.ContainsFunc(openaiOnly, func(k string) bool { return bytes.Contains(body, []byte(k)) }) {
 		return body
 	}
 	var q map[string]json.RawMessage

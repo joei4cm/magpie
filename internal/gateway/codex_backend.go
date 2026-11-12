@@ -2878,7 +2878,7 @@ func refusesInput(status int, b []byte) bool {
 // request goes back 400 "Item with id 'rs_…' not found" (#1008); its
 // summary was the model's notes to itself, which no model reads back.
 func withoutBareReasoning(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"reasoning"`)) || !anyInputItem(body, func(it []byte) bool {
+	if !bodyHas(body, markerReasoning) || !anyInputItem(body, func(it []byte) bool {
 		r := reasoningOf(it)
 		return r.typeOK && r.encOK && r.reasoning && !r.sealed
 	}) {
@@ -3095,7 +3095,7 @@ func refusesCitationOffsets(status int, b []byte) bool {
 // with it. Such an annotation goes; the text, and a citation with its
 // offsets, stay as they came.
 func withoutOffsetlessCitations(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"annotations"`)) || !anyInputItem(body, itemCitesWithoutOffsets) {
+	if !bodyHas(body, markerAnnotations) || !anyInputItem(body, itemCitesWithoutOffsets) {
 		return body
 	}
 	q, err := rawObject(body)
@@ -3198,7 +3198,7 @@ var openaiItemPrefix = map[string]string{
 // call's output names it by as it was, and the rest of the request byte
 // for byte.
 func callItemIDs(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"tool_search_call"`)) && !bytes.Contains(body, []byte(`"custom_tool_call"`)) {
+	if !bodyHasAny(body, `"tool_search_call"`, `"custom_tool_call"`) {
 		return body
 	}
 	if !anyInputItem(body, func(it []byte) bool {
@@ -3494,9 +3494,8 @@ func boundCallIDs(body []byte) []byte {
 // output token replay's include and the sealed output it carries back on a
 // message or call (encrypted_content on any item but reasoning and a
 // compaction).
-var openaiOnly = [][]byte{[]byte(`"internal_chat_message_metadata_passthrough"`),
-	[]byte(`"encrypted_function_args"`), []byte(`"stream_options"`), []byte(`"configuration_update"`),
-	[]byte(`"` + outputReplay + `"`), []byte(`"encrypted_content"`)}
+var openaiOnly = []string{markerChatMetadata, markerEncryptedArgs, markerStreamOptions,
+	markerConfigUpdate, markerOutputReplay, markerEncrypted}
 
 // outputReplay is what Codex asks OpenAI for with output token replay on
 // (client.rs): each message's and call's own sealed copy. Copilot's
@@ -3531,7 +3530,7 @@ func forVendor(p provider.Provider, body []byte, compaction bool) []byte {
 	if compaction {
 		body = developerItemsAsSystem(body)
 	}
-	if !slices.ContainsFunc(openaiOnly, func(k []byte) bool { return bytes.Contains(body, k) }) || !forVendorChanges(body) {
+	if !bodyHasAny(body, openaiOnly...) || !forVendorChanges(body) {
 		return body
 	}
 	q, err := rawObject(body)
@@ -3685,7 +3684,7 @@ func forVendorChanges(body []byte) bool {
 // takes developer alone, never comes here. The message stays where it
 // stood, so a thread's cached prefix keeps its shape (#502).
 func developerItemsAsSystem(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"developer"`)) {
+	if !bodyHas(body, markerDeveloper) {
 		return body
 	}
 	var q map[string]json.RawMessage
