@@ -692,7 +692,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			}
 		}()
 		start := time.Now()
-		d, err := readDrawing(r)
+		d, err := readDrawing(r, inputBody)
 		if err != nil {
 			writeError(w, provider.Chat, 400, err.Error())
 			return
@@ -968,8 +968,10 @@ func vendorSaid(text string) string {
 }
 
 // readDrawing reads an images request: JSON, or the multipart form OpenAI's
-// edits take.
-func readDrawing(r *http.Request) (drawing, error) {
+// edits take. body is the request's, already read and bounded by the
+// gateway's body room (requestBody), so the JSON branch reads it from there
+// rather than making a second copy of it (#3069).
+func readDrawing(r *http.Request, body []byte) (drawing, error) {
 	var d drawing
 	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if ct == "multipart/form-data" {
@@ -1014,10 +1016,6 @@ func readDrawing(r *http.Request) (drawing, error) {
 			d.Markup = &pic
 		}
 	} else {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			return d, err
-		}
 		var in struct {
 			Model          string          `json:"model"`
 			Prompt         string          `json:"prompt"`

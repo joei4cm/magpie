@@ -120,10 +120,10 @@ func TestMediaJSONPastOldBodyLimit(t *testing.T) {
 			var prompt string
 			var err error
 			if api == "images" {
-				d, e := readDrawing(r)
+				d, e := readDrawing(r, payload)
 				prompt, err = d.Prompt, e
 			} else {
-				f, e := readFilming(r)
+				f, e := readFilming(r, payload)
 				prompt, err = f.Prompt, e
 			}
 			if err != nil || prompt != "tail" {
