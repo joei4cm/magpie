@@ -1155,7 +1155,7 @@ func desktopSearchCall(body []byte) bool {
 // hasTools: the request offers the model tools (Anthropic's, Chat's and
 // Responses' "tools" alike).
 func hasTools(body []byte) bool {
-	if !bodyHas(body, `"tools"`) {
+	if !bodyHas(body, markerTools) {
 		return false
 	}
 	var v struct {

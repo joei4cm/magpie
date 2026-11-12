@@ -26,7 +26,7 @@ import (
 // tools. A request with no message tools, or one that doesn't parse, is
 // as it came.
 func liftMessageTools(body []byte) []byte {
-	if !bodyHas(body, `"tools"`) {
+	if !bodyHas(body, markerTools) {
 		return body
 	}
 	if len(gjson.GetBytes(body, "messages.#.tools").Array()) == 0 {

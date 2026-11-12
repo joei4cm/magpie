@@ -20,7 +20,7 @@ import (
 // type), one with no name, and a request that doesn't parse are as they
 // came; a tool's other fields stay beside its function.
 func shapeChatTools(body []byte) []byte {
-	if !bodyHas(body, `"tools"`) {
+	if !bodyHas(body, markerTools) {
 		return body
 	}
 	tools := gjson.GetBytes(body, "tools")

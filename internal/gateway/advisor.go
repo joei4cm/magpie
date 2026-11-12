@@ -29,7 +29,7 @@ import (
 // advisor's model is the client's to name, and the vendor runs it on the
 // user's account, so a key held to some models is held here too.
 func advisorTools(body []byte, p provider.Provider, upstream string, wires map[string]string, allowed func(model string) bool) []byte {
-	if !bodyHas(body, `"advisor_`) {
+	if !bodyHas(body, markerAdvisor) {
 		return body
 	}
 	tools := gjson.GetBytes(body, "tools")

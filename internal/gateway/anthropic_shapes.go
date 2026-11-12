@@ -251,7 +251,7 @@ func withDisplay(body []byte, all bool) []byte {
 
 // hasTurnEffort is a request with an output_config on one of its messages.
 func hasTurnEffort(body []byte) bool {
-	if !bodyHas(body, `"output_config"`) {
+	if !bodyHas(body, markerOutputConfig) {
 		return false
 	}
 	found := false
@@ -305,7 +305,7 @@ func withoutTurnEffort(body []byte) []byte {
 // none (a turn's effort alone) is left out. The other messages stay as they
 // were sent.
 func withSystemOnTop(body []byte) []byte {
-	if !bodyHas(body, `"system"`) {
+	if !bodyHas(body, markerSystem) {
 		return body
 	}
 	var v struct {
@@ -578,7 +578,7 @@ func refsOnly(c gjson.Result) bool {
 // hasRefsOnlyResult is a request with a tool_result holding only
 // tool_reference blocks.
 func hasRefsOnlyResult(body []byte) bool {
-	if !bodyHas(body, `"tool_reference"`) {
+	if !bodyHas(body, markerToolReference) {
 		return false
 	}
 	found := false
@@ -678,7 +678,7 @@ func refsRefused(errBody []byte) bool {
 // hasResultRefs is a request with a tool_reference block in a
 // tool_result's content.
 func hasResultRefs(body []byte) bool {
-	if !bodyHas(body, `"tool_reference"`) {
+	if !bodyHas(body, markerToolReference) {
 		return false
 	}
 	found := false

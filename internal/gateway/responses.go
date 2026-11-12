@@ -1196,7 +1196,7 @@ func replaysReasoning(model, host string) bool {
 // be passed back to the API" (#1104, #1592, #1822). A body with nothing to
 // give comes back byte for byte.
 func withReasoningText(body []byte) []byte {
-	if !bodyHas(body, `"reasoning"`) && !bodyHas(body, `_call"`) &&
+	if !bodyHas(body, markerReasoning) && !bodyHas(body, `_call"`) &&
 		!bodyHas(body, `_output"`) {
 		return body
 	}

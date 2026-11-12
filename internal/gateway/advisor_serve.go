@@ -65,7 +65,7 @@ func advisedHere(p provider.Provider, from, to provider.Protocol, model string, 
 // advisorAsked is the advisor model a Messages request asks for, or ""
 // when it asks for none or has a tool of its own by the advisor's name.
 func advisorAsked(from provider.Protocol, body []byte) string {
-	if from != provider.Anthropic || !bodyHas(body, `"advisor_`) {
+	if from != provider.Anthropic || !bodyHas(body, markerAdvisor) {
 		return ""
 	}
 	adv := ""

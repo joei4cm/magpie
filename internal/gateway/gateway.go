@@ -2441,7 +2441,7 @@ func (s *Server) handle(from provider.Protocol) http.HandlerFunc {
 			// which magpie points here, #1301): the summary is magpie's to
 			// make, as on CodexPath, and magpie's summaries go back as text;
 			// a provider set to compact natively is asked Codex's own (#1099)
-			if bodyHas(body, `"compaction`) {
+			if bodyHas(body, markerCompaction) {
 				var compact bool
 				if body, compact = codexInputAs(body, true, s.nativeCompactionFor(modelOf(body))); compact {
 					s.codexCompact(w, r, body)
@@ -10371,7 +10371,7 @@ func rewriteModel(body []byte, model string) []byte {
 // accepts, but other Chat Completions backends (DeepSeek among them) reject
 // the whole request; every backend accepts system, OpenAI included.
 func developerAsSystem(body []byte) []byte {
-	if !bodyHas(body, `"developer"`) {
+	if !bodyHas(body, markerDeveloper) {
 		return body
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))

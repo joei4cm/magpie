@@ -611,7 +611,7 @@ func prevElsewhere(r *http.Request, p provider.Provider, body []byte, force bool
 		return body
 	}
 	n := a.total - a.fresh
-	if !a.clientWhole && n <= 0 || !bodyHas(body, `"id"`) {
+	if !a.clientWhole && n <= 0 || !bodyHas(body, markerID) {
 		return body
 	}
 	var q map[string]json.RawMessage
