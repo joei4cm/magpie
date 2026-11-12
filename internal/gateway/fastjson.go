@@ -116,6 +116,15 @@ const heldBodiesMost = 64
 // keeps alive may be (inHeldBody).
 const heldShareMost = 16
 
+// heldShareLeast is the smallest string unquoteJSON shares from a body
+// being served instead of copying it. inHeldBody bounds how much bigger
+// than a shared value its body may be; this keeps a small value from
+// holding a body at all, since a short string's copy costs little and a
+// body kept for one would be kept for nothing. The strings worth sharing
+// are the big ones: an image turn's pictures are most of its body, and
+// each was copied once more to be read (#5748).
+const heldShareLeast = 1 << 20
+
 // holdBody shares body's bytes with what decodeJSON reads from it until
 // ctx is done. body must be the request's as read, which nothing writes
 // to: a request body is read whole once (readRequestBody) and only read
@@ -683,7 +692,8 @@ func keyName(key []byte) ([]byte, bool) {
 
 // unquoteJSON is the string a valid JSON string literal holds, as
 // encoding/json decodes it (unquoteBytes): invalid UTF-8 and lone
-// surrogates become U+FFFD.
+// surrogates become U+FFFD. A large string of a body being served is that
+// body's own bytes, not a copy of them (heldShareLeast).
 func unquoteJSON(q []byte) (string, bool) {
 	if len(q) < 2 || q[0] != '"' || q[len(q)-1] != '"' {
 		return "", false
@@ -706,6 +716,14 @@ func unquoteJSON(q []byte) (string, bool) {
 		r += size
 	}
 	if r == len(s) {
+		if len(s) >= heldShareLeast && inHeldBody(s) {
+			// the request's own body, which nothing writes to while it is
+			// held (holdBody): shared, as a raw value of it is, so a turn's
+			// pictures aren't copied once more to be read. What keeps the
+			// string keeps the body with it, which heldShareLeast and
+			// inHeldBody's heldShareMost bound between them.
+			return unsafe.String(unsafe.SliceData(s), len(s)), true
+		}
 		return string(s), true
 	}
 	b := make([]byte, 0, len(s)+2*utf8.UTFMax)
