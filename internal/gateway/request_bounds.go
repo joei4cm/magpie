@@ -272,28 +272,44 @@ func readBoundedRequestBody(w http.ResponseWriter, r *http.Request, limits reque
 	return textBody(r.Header, body), 0, nil
 }
 
-// sizedReadFirst is the most readSized sets aside before a byte has come:
-// a client that says more than it sends makes magpie hold no more than
-// this, or twice what it sent.
+// sizedReadFirst is the most readSized sets aside before a byte has come
+// for a declaration past sizedReadOnce: a client that says more than it
+// sends makes magpie hold no more than this, or twice what it sent.
 const sizedReadFirst = 1 << 20
+
+// sizedReadOnce is the largest declaration readSized sets aside whole
+// before a byte has come. Within it the room for what was declared is
+// already taken for the request before the read (bodyRoom.take in
+// readRequestBody, on r.ContentLength), so those bytes are held either
+// way and only the copies of them are spared: a 20 MiB image turn was
+// read into 1+2+4+8+16+20 MiB to be read at all (#5748). Past it the
+// declaration is still not trusted, so a client's word alone sets aside
+// no more than sizedReadFirst.
+const sizedReadOnce = 64 << 20
 
 // readSized reads r to its end into a slice the size the client declared,
 // when it declared one (declared > 0): io.ReadAll reads into chunks and
 // copies them into a slice of their sum, two copies of every body, and an
 // agent sends its whole conversation, ~1 MB, on every turn (yg6888 on X:
-// ~1 GB). Content-Length is not trusted for the allocation: room grows by
-// doubling, from sizedReadFirst, up to what was declared, and straight to
-// it once that is within a quarter, so an honest body of 1 MB or less is
-// read into one slice of its own size, and a larger one into a final slice
-// of its own size, with at most 2.6 times the body allocated in all (a
-// doubling that fell just short of it made that 3). A body shorter than it
-// said is held in at most two and a half times what it sent. A body longer
-// than it said reads on, as io.ReadAll would. The error is io.ReadAll's: nil at io.EOF.
+// ~1 GB). A declaration within sizedReadOnce is set aside whole, since the
+// room for it is taken before the read either way. Content-Length is not
+// trusted past that: room grows by doubling, from sizedReadFirst, up to
+// what was declared, and straight to it once that is within a quarter, so
+// an honest body of 1 MB or less is read into one slice of its own size,
+// and a larger one into a final slice of its own size, with at most 2.6
+// times the body allocated in all (a doubling that fell just short of it
+// made that 3). A body shorter than it said is held in at most two and a
+// half times what it sent. A body longer than it said reads on, as
+// io.ReadAll would. The error is io.ReadAll's: nil at io.EOF.
 func readSized(r io.Reader, declared int64) ([]byte, error) {
 	if declared <= 0 {
 		return io.ReadAll(r)
 	}
-	b := make([]byte, 0, min(declared, sizedReadFirst))
+	first := min(declared, sizedReadFirst)
+	if declared <= sizedReadOnce {
+		first = declared
+	}
+	b := make([]byte, 0, first)
 	for {
 		if len(b) == cap(b) {
 			if int64(len(b)) >= declared {
