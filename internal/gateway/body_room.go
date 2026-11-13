@@ -150,23 +150,66 @@ func (b *bodyRoomT) take(ctx context.Context, n int64) error {
 }
 
 // letIn lets in, in order, each waiter there is room for: one bigger than
-// the room when nothing is held. b.mu is held.
+// the room when nothing is held. A body bigger than the whole room runs
+// alone, so it waits for the room to be empty whatever is behind it, and a
+// body that fits in the room that is left goes ahead of it: with 19 MiB
+// held of a 78 MiB room, a 1 MiB request queued behind a waiting 103 MiB
+// one used to wait its whole 100s and be answered 503, while the room had
+// room for it (#6495). A body that fits still waits behind one that fits,
+// so a big body isn't passed by a stream of small ones. b.mu is held.
 func (b *bodyRoomT) letIn() {
 	for len(b.queue) > 0 {
 		w := b.queue[0]
 		if b.held > 0 && b.held+w.n > b.room {
+			if w.n > b.room {
+				b.letSmallerPast(w)
+			}
+			return
+		}
+		// a body bigger than the room runs alone, and the room may no
+		// longer be empty: admit registers the request's end, which
+		// gives its room back, and that can run before this returns to
+		// the head
+		if w.n > b.room && b.held > 0 {
 			return
 		}
 		b.queue = b.queue[1:]
-		if b.by == nil {
-			b.by = map[context.Context]int64{}
-		}
-		b.held += w.n
-		b.by[w.ctx] = w.n
-		close(w.in)
-		ctx := w.ctx
-		context.AfterFunc(ctx, func() { b.give(ctx) })
+		b.admit(w)
 	}
+}
+
+// letSmallerPast lets in, in order, the bodies that fit in the room that
+// is left, past w, a body bigger than the whole room that is waiting for
+// the room to be empty. A body bigger than the room waits behind the ones
+// of its own kind that came before it, and a body that fits waits behind a
+// body that fits, so the room's order is kept among each kind. b.mu is
+// held.
+func (b *bodyRoomT) letSmallerPast(w *bodyWaiter) {
+	for i := 1; i < len(b.queue); {
+		next := b.queue[i]
+		if next.n > b.room {
+			i++
+			continue
+		}
+		if b.held+next.n > b.room {
+			break
+		}
+		b.queue = slices.Delete(b.queue, i, i+1)
+		b.admit(next)
+	}
+}
+
+// admit lets w in: it holds its room, and the request's end gives it back.
+// b.mu is held.
+func (b *bodyRoomT) admit(w *bodyWaiter) {
+	if b.by == nil {
+		b.by = map[context.Context]int64{}
+	}
+	b.held += w.n
+	b.by[w.ctx] = w.n
+	close(w.in)
+	ctx := w.ctx
+	context.AfterFunc(ctx, func() { b.give(ctx) })
 }
 
 // give returns what ctx's request held.
