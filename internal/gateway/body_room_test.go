@@ -109,6 +109,109 @@ func TestBodyRoomBiggerThanTheRoomRunsAlone(t *testing.T) {
 	}
 }
 
+// A body that fits in the room that is left goes ahead of a body bigger
+// than the whole room that is waiting in front of it. A body bigger than
+// the room runs alone, so it waits for the room to be empty whatever is
+// behind it, and a small one behind it used to wait behind it too: with
+// 19 MiB held of a 64 MiB room, a 1 MiB request queued behind a waiting
+// 103 MiB one waited its whole 100s and was answered 503, while the room
+// had 45 MiB free (#6495).
+func TestBodyRoomSmallGoesAheadOfAnOversizedWaiter(t *testing.T) {
+	b := roomOf(64 << 20)
+	first, endFirst := context.WithCancel(context.Background())
+	big, endBig := context.WithCancel(context.Background())
+	later, endLater := context.WithCancel(context.Background())
+	defer endFirst()
+	defer endBig()
+	defer endLater()
+	if err := b.take(first, 19<<20); err != nil {
+		t.Fatal(err)
+	}
+	bigGot := taking(b, big, 103<<20)
+	waitQueued(t, b, 1)
+	if err := b.take(later, 1<<20); err != nil {
+		t.Fatalf("a 1 MiB body waited behind one bigger than the room, with room for it: %v", err)
+	}
+	if h := roomHeld(b); h != 20<<20 {
+		t.Fatalf("held = %d MiB, want 20", h>>20)
+	}
+	select {
+	case <-bigGot:
+		t.Fatal("a body bigger than the room went in beside one being served")
+	default:
+	}
+	endFirst()
+	endLater()
+	if err := <-bigGot; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A body that fits goes ahead of every body bigger than the room that is
+// waiting in front of it, and a body that doesn't fit waits behind them,
+// so the room's order among bodies that fit is kept (#6495).
+func TestBodyRoomSmallPassesEveryOversizedWaiter(t *testing.T) {
+	b := roomOf(64 << 20)
+	first, endFirst := context.WithCancel(context.Background())
+	if err := b.take(first, 40<<20); err != nil {
+		t.Fatal(err)
+	}
+	big1, endBig1 := context.WithCancel(context.Background())
+	big2, endBig2 := context.WithCancel(context.Background())
+	defer endBig1()
+	defer endBig2()
+	big1Got := taking(b, big1, 100<<20)
+	waitQueued(t, b, 1)
+	big2Got := taking(b, big2, 200<<20)
+	waitQueued(t, b, 2)
+	later, endLater := context.WithCancel(context.Background())
+	defer endLater()
+	if err := b.take(later, 20<<20); err != nil {
+		t.Fatal(err)
+	}
+	tooBig, endTooBig := context.WithCancel(context.Background())
+	defer endTooBig()
+	tooBigGot := taking(b, tooBig, 30<<20)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		b.mu.Lock()
+		var waiting bool
+		for _, q := range b.queue {
+			if q.ctx == tooBig {
+				waiting = true
+			}
+		}
+		b.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the 30 MiB body was not waiting")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-tooBigGot:
+		t.Fatal("a 30 MiB body went ahead of the ones bigger than the room, with no room for it")
+	default:
+	}
+	endFirst()
+	endLater()
+	if err := <-big1Got; err != nil {
+		t.Fatal(err)
+	}
+	endBig1()
+	if err := <-big2Got; err != nil {
+		t.Fatal(err)
+	}
+	// the 30 MiB body gives its room back when its request ends, and that
+	// runs when it likes: the 200 MiB body waits for the room to be empty
+	endBig2()
+	if err := <-tooBigGot; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // First come, first served: a small body that came after a waiting big one
 // waits behind it, so a big body isn't passed by a stream of small ones.
 func TestBodyRoomKeepsOrder(t *testing.T) {

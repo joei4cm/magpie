@@ -508,7 +508,9 @@ recorded as a prediction failure (`noPrediction`).
   description (`seenBody`), Codex's auto reset (`autoReset`), plugins'
   gateway hooks (`GatewayBegin`) and JS gateway middleware, and every
   `notePhase` (slot, rpm, upstream, redact), and the body room's queue
-  (`bodyRoom.take`, at most `bodyRoomWait`, 100s). Each is named (its
+  (`bodyRoom.take`, at most `bodyRoomWait`, 100s; a body bigger than
+  the room waits for the room to empty, and a body that fits in what is
+  left passes such a waiter, #6495). Each is named (its
   `kind`), and the time spent in each kind is kept (`waitKind`) for the
   report below. What is left is magpie's own work
   (the catalog, parsing, planning, reading the usage log), ~8.5s at its
