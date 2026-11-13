@@ -212,6 +212,8 @@ func fakeInstallAt(t *testing.T, mode string, vulkan bool, d string) string {
 		}
 		disk.timer = nil
 		disk.loaded = ""
+		disk.wrote = time.Time{}
+		disk.dirty = false
 		disk.mu.Unlock()
 		disk.saves.Wait() // a write under way reads dir
 		srv.mu.Lock()

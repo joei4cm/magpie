@@ -27,6 +27,7 @@ import (
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/omarchy"
+	"github.com/yetone/magpie/internal/pii"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/shortcut"
@@ -451,6 +452,7 @@ func Run(version string, showMain bool, link string) error {
 			if handedOver.Load() {
 				return
 			}
+			pii.FlushCache() // what the local masking model learned, for the next start
 			if served.Load() != nil {
 				ended, err := agent.EndCodexFailover()
 				if err != nil {

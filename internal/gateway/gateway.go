@@ -36,6 +36,7 @@ import (
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/gwtool"
 	"github.com/yetone/magpie/internal/lazyre"
+	"github.com/yetone/magpie/internal/pii"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/pluginrt"
 	"github.com/yetone/magpie/internal/provider"
@@ -1008,6 +1009,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		close(s.sessionsSaved)
 		provider.FlushServed() // what answered last, kept for the next start and the CLI
 		flushSticks()          // who answered which conversation, for the next start or the magpie handed over to
+		pii.FlushCache()       // and what the local masking model learned, for the next start
 		// the MCP servers the hub started end with the gateway
 		StopHub()
 	}()

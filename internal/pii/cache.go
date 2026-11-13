@@ -6,9 +6,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/redact"
@@ -38,13 +40,28 @@ func cachePath() string { return filepath.Join(dir(), "found-"+modelSHA[:12]+".b
 // for a burst of requests.
 var saveAfter = 2 * time.Second
 
+// saveEvery is the least time between two writes of the file while the
+// gateway runs: the file holds the whole LRU, so a write is the whole
+// cache — 900 KB for a cache that changes by a few bytes between saves —
+// and a gateway answering every few seconds wrote it every few seconds,
+// 17 GB a day on a busy one (#6457). It is the bound internal/usage gives
+// its own log file (logDiskEvery), and what was learned is written when
+// the gateway ends (FlushCache), so the bound costs a crash the last
+// minutes' learning and nothing else.
+var saveEvery = 10 * time.Minute
+
 // diskState is a backend's cache file: read once, written saveAfter
-// after an answer.
+// after an answer, and at most once every saveEvery.
 type diskState struct {
 	mu     sync.Mutex
 	loaded string // the file read into cache, once
 	timer  *time.Timer
 	saving sync.Mutex
+	// wrote is when the file was last written, and dirty says what was
+	// learned since: a write with nothing learned in it is a write of
+	// the same bytes.
+	wrote time.Time
+	dirty bool
 	// saves counts a timer's write from when it is set until it is
 	// done, so a test's cleanup can wait for one under way.
 	saves sync.WaitGroup
@@ -79,20 +96,85 @@ func (bk *backend) loadCache() {
 	}
 }
 
-// saveSoon writes the file saveAfter from now, unless a write is due.
+// saveSoon writes the file saveAfter from now, and not before saveEvery
+// since the last write.
 func (bk *backend) saveSoon() {
 	disk := bk.disk
 	disk.mu.Lock()
 	defer disk.mu.Unlock()
+	disk.dirty = true
 	if disk.timer == nil {
 		disk.saves.Add(1)
-		disk.timer = time.AfterFunc(saveAfter, func() {
+		disk.timer = time.AfterFunc(bk.saveInLocked(), func() {
 			defer disk.saves.Done()
 			disk.mu.Lock()
 			disk.timer = nil
+			dirty := disk.dirty
 			disk.mu.Unlock()
+			if !dirty {
+				return // nothing was learned since the last write
+			}
+			if !bk.writeDue() {
+				// the bound has not passed: the file is written when it
+				// has, and what was learned is kept until then
+				bk.saveSoon()
+				return
+			}
 			bk.saveCache()
 		})
+	}
+}
+
+// saveInLocked is how long from now the file is written: saveAfter
+// after an answer, and not before saveEvery since the last write. The
+// caller holds disk.mu, so the lock is not taken twice.
+func (bk *backend) saveInLocked() time.Duration {
+	wrote := bk.disk.wrote
+	if wrote.IsZero() {
+		return saveAfter
+	}
+	if since := time.Since(wrote); since < saveEvery {
+		return saveEvery - since
+	}
+	return saveAfter
+}
+
+// writeDue says the file is written now: nothing was written yet, or
+// saveEvery has passed since the last write.
+func (bk *backend) writeDue() bool {
+	disk := bk.disk
+	disk.mu.Lock()
+	defer disk.mu.Unlock()
+	if disk.wrote.IsZero() {
+		return true
+	}
+	return time.Since(disk.wrote) >= saveEvery
+}
+
+// FlushCache writes what the model learned to the file, if it is not
+// written already: the file is written at most once every saveEvery
+// while the gateway runs, and a gateway that ends keeps what it learned
+// (#6457).
+func FlushCache() {
+	pf.flushCache()
+	guardBackend.flushCache()
+}
+
+// flushCache writes the file if what was learned is not in it yet.
+func (bk *backend) flushCache() {
+	disk := bk.disk
+	disk.mu.Lock()
+	if !disk.dirty {
+		disk.mu.Unlock()
+		return
+	}
+	if disk.timer != nil && disk.timer.Stop() {
+		disk.saves.Done()
+	}
+	disk.timer = nil
+	disk.mu.Unlock()
+	if err := bk.saveCache(); err != nil {
+		log.Printf("pii: the cache file was not written: %v", err)
 	}
 }
 
@@ -124,9 +206,20 @@ func (bk *backend) saveCache() error {
 	}
 	if err != nil {
 		os.Remove(f.Name())
+		return err
 	}
-	return err
+	disk.mu.Lock()
+	disk.wrote = time.Now()
+	disk.dirty = false
+	disk.mu.Unlock()
+	if f := cacheWritten.Load(); f != nil {
+		(*f)()
+	}
+	return nil
 }
+
+// cacheWritten, in tests, is told of each write of the file.
+var cacheWritten atomic.Pointer[func()]
 
 // encodeCache is c, oldest first: the magic, a count, then each entry's
 // hash, its spans' count and each span's start, end, score (a float32)
