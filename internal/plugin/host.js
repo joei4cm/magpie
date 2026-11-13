@@ -353,25 +353,43 @@ let config = { provider: {} } // what the plugins' config hooks made of it
 let loadWait = 20 * 1000
 let listWait = 20 * 1000
 
-// watchHeavy says once when this host holds more than heavy.mb MiB, a
-// full collection run first so garbage not yet collected doesn't count:
-// magpie then starts a new host for the calls to come and stops this one
-// once its own are answered (host.go's heavyMB and recycle). It checks
-// every heavy.everyMillis, from heavy.afterMillis after the host started.
+// watchHeavy says when this host holds more than heavy.mb MiB, a full
+// collection run first so garbage not yet collected doesn't count: magpie
+// then starts a new host for the calls to come and stops this one once its
+// own are answered (host.go's heavyMB and recycle).
+//
+// The host is looked at every heavy.fastMillis, from its first moment. It
+// used to be looked at from heavy.afterMillis (ten minutes) after the host
+// started, and every heavy.everyMillis (a minute) after that, and a host
+// that grew a gigabyte in two seconds was ended by the system before
+// either could see it (#6458: 930 host starts, 70 of them killed by the
+// kernel's OOM killer, and not one of them ever seen by the guard).
+//
+// The growth since the last look goes with the report, so magpie knows a
+// host that is bursting and need not wait for its turn to replace it. The
+// first look says no growth: what the plugins took to load is behind the
+// host already, and a plugin that takes that much to load is one the
+// guard waits for like any other.
+//
+// A full collection runs once a look, the expensive part of the check: a
+// host over the bound that grew there since the last one is heavy whatever
+// a collection would free.
 function watchHeavy(heavy) {
   const mb = Number(heavy?.mb)
   if (!(mb > 0)) return
-  const every = Math.max(Number(heavy.everyMillis) || 60_000, 10)
-  const after = Math.max(Number(heavy.afterMillis) || 0, 0)
+  const fast = Math.max(Number(heavy.fastMillis) || 1_000, 10)
   const rss = () => process.memoryUsage().rss / 1048576
+  let last = 0
   const timer = setInterval(() => {
-    if (process.uptime() * 1000 < after || rss() <= mb) return
-    Bun.gc(true)
     const held = rss()
+    const grew = last > 0 ? held - last : 0
+    last = held
     if (held <= mb) return
-    clearInterval(timer)
-    send({ event: "heavy", count: Math.round(held) })
-  }, every)
+    Bun.gc(true)
+    const after = rss()
+    if (after <= mb) return // it was garbage: the host is kept
+    send({ event: "heavy", count: Math.round(after), grew: Math.round(grew) })
+  }, fast)
   timer.unref?.()
 }
 
