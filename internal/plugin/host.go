@@ -65,6 +65,11 @@ type message struct {
 	Title    string `json:"title"`
 	Variant  string `json:"variant"`
 	Count    int    `json:"count"`
+	// Grew is how much more memory a "heavy" event's host held than a
+	// look before it, in MiB: a host that grew that much between two
+	// looks is bursting, and the box has no time to wait for its turn
+	// (heavyGrow in host.go)
+	Grew int `json:"grew"`
 	// Loads is a "load" event's models and how busy each is, a percent;
 	// -1 clears one (magpie.load in host.js)
 	Loads map[string]float64 `json:"loads"`
@@ -1185,9 +1190,8 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		"loadMillis":    pluginLoadWait.Milliseconds(),
 		"listMillis":    pluginListWait.Milliseconds(),
 		"heavy": map[string]any{
-			"mb":          heavyMB,
-			"afterMillis": heavyAfter.Milliseconds(),
-			"everyMillis": heavyEvery.Milliseconds(),
+			"mb":         heavyMB,
+			"fastMillis": heavyFast.Milliseconds(),
 		},
 	}, &res)
 	if err != nil {
@@ -1269,28 +1273,76 @@ var (
 // OOM killer took it, with four plugins and their requests going through
 // it. Measured with every plugin of that report loaded and 3000 600KB
 // requests, 4 at a time, a host holds 84 to 236 MiB, so the bound leaves
-// room for that twice over. The host checks every heavyEvery, once it
-// has been up heavyAfter; tests shorten all three.
+// room for that twice over.
+//
+// The host is looked at every heavyFast, from its first moment. It used
+// to be looked at from heavyAfter (ten minutes) after the host started,
+// and every heavyEvery (a minute) after that: a host that grew a
+// gigabyte in two seconds was ended by the system before either could see
+// it, and the guard never fired at all (#6458: 930 host starts over a
+// day, 70 of them killed by the kernel's OOM killer, and not one of them
+// seen by the guard). Tests shorten these.
 var (
-	heavyMB    = 512
-	heavyAfter = 10 * time.Minute
+	heavyMB   = 512
+	heavyFast = time.Second
+	// heavyEvery is how often a host may be replaced for holding too much:
+	// a plugin that holds that much for every call would otherwise have a
+	// host replaced after every call, and each replacement loads every
+	// plugin again.
 	heavyEvery = time.Minute
+	// heavyGrow is how much more memory a host may hold between two looks
+	// before it is replaced without waiting for its turn: 25 to 30 MB
+	// every 50 ms in the report that came with #6458, and a box that
+	// little room has none to spare.
+	heavyGrow = 128
 )
+
+// heavyLast is when a host was last replaced for holding too much, so a
+// plugin that holds that much for every call has one host a minute
+// replaced and not one a second. A host that is bursting is not waited
+// for (heavyGrow).
+var (
+	heavyMu   sync.Mutex
+	heavyLast time.Time
+)
+
+// heavyAllowed is whether a host holding too much may be replaced now: not
+// within heavyEvery of the last one that was, unless this one grew by
+// heavyGrow MiB between two looks (a burst), which is waited for no time.
+func heavyAllowed(grew int) bool {
+	heavyMu.Lock()
+	defer heavyMu.Unlock()
+	now := time.Now()
+	if grew < heavyGrow && !heavyLast.IsZero() && now.Sub(heavyLast) < heavyEvery {
+		return false
+	}
+	heavyLast = now
+	return true
+}
+
+// isCurrent is whether h is still the host calls go to.
+func (h *host) isCurrent() bool {
+	hostMu.Lock()
+	defer hostMu.Unlock()
+	return current == h
+}
 
 // recycle replaces h, when it is still the host calls go to, as a plugin
 // update does (Restart): the calls h is answering finish on it, and the
-// next call starts a new host. recycles counts the hosts it replaced.
-func (h *host) recycle() {
+// next call starts a new host. recycles counts the hosts it replaced. It
+// says whether it replaced one: h wasn't the host calls went to.
+func (h *host) recycle() bool {
 	hostMu.Lock()
 	if current != h {
 		hostMu.Unlock()
-		return
+		return false
 	}
 	current = nil
 	hostMu.Unlock()
 	recycles.Add(1)
 	h.retire()
 	changed()
+	return true
 }
 
 var recycles atomic.Int64
@@ -1429,8 +1481,20 @@ func (h *host) dispatch(m message) {
 		case "log":
 			log.Printf("plugin [%s]: %s", m.Level, m.Message)
 		case "heavy":
-			log.Printf("plugin: the host holds %d MiB after a collection; a new one takes the next calls", m.Count)
-			go h.recycle()
+			// the host holds more than it may: a new one takes the calls
+			// made from then on, and this one finishes its own (recycle).
+			// A host that grew fast is replaced at once: the box has no
+			// time to wait (heavyGrow). A host that is on its way out
+			// says so still, and its report is of no turn: the host the
+			// calls go to is another one.
+			if !h.isCurrent() || !heavyAllowed(m.Grew) {
+				return
+			}
+			go func() {
+				if h.recycle() {
+					log.Printf("plugin: the host holds %d MiB after a collection; a new one takes the next calls", m.Count)
+				}
+			}()
 		}
 		return
 	}
