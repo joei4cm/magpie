@@ -11,7 +11,10 @@ import (
 // group is a job the command is put in, and every process it starts with
 // it; closing the job ends them all, as it does when magpie exits. A
 // command that can't be put in one is killed alone.
-type group struct{ job windows.Handle }
+type group struct {
+	job windows.Handle
+	failure
+}
 
 func ownGroup(*exec.Cmd) {}
 

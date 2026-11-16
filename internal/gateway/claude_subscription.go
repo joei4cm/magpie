@@ -6956,6 +6956,14 @@ func (r *subscriptionRun) abort() <-chan struct{} {
 	var stopped <-chan struct{} = closedChan
 	if t != nil {
 		stopped = t.Stop(stopGrace)
+		// a run whose processes could not be ended says so: they are
+		// still there, and the memory they hold is not free (#6599)
+		go func() {
+			<-stopped
+			if err := t.StopErr(); err != nil {
+				log.Printf("claude: the run's Claude Code pid %d could not be ended: %v; its processes are still there", r.pid(), err)
+			}
+		}()
 	}
 	r.finish()
 	return stopped

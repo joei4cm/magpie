@@ -3,6 +3,8 @@
 package proc
 
 import (
+	"errors"
+	"log"
 	"os/exec"
 	"syscall"
 	"time"
@@ -11,7 +13,7 @@ import (
 // group is the session the command leads: its children are in it unless
 // they make one of their own, and grok's MCP servers do, but those end when
 // their input closes with the CLI.
-type group struct{}
+type group struct{ failure }
 
 func ownGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
@@ -20,7 +22,7 @@ func ownGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setsid = true
 }
 
-func (group) join(*exec.Cmd) {}
+func (*group) join(*exec.Cmd) {}
 
 // kill ends every process of the group. One signal to the group misses a
 // process being forked as it is sent (macOS): a script that keeps starting
@@ -35,7 +37,11 @@ func (group) join(*exec.Cmd) {}
 // is left, or killFor has passed: magpie exiting or putting a new version in
 // its place waits for it, since an exit ends the loop with what it missed
 // still running (#1278).
-func (group) kill(cmd *exec.Cmd) <-chan struct{} {
+//
+// A signal refused (a container's AppArmor, #6599) is not the group being
+// gone: the processes are still there, and why the tree could not be ended
+// is kept and said.
+func (g *group) kill(cmd *exec.Cmd) <-chan struct{} {
 	gone := make(chan struct{})
 	pgid := cmd.Process.Pid
 	// the one kill function for the whole kill, taken once: the loop below
@@ -43,7 +49,8 @@ func (group) kill(cmd *exec.Cmd) <-chan struct{} {
 	// putting the old one back when it ends must not race its reads (the
 	// data race TestProbeKillEndsWhatTheSignalMissed went red under).
 	signal := signalGroup
-	if signal(pgid) != nil {
+	if err := signal(pgid); err != nil {
+		g.refused(pgid, err)
 		close(gone) // none of it is left
 		return gone
 	}
@@ -51,7 +58,8 @@ func (group) kill(cmd *exec.Cmd) <-chan struct{} {
 		defer close(gone)
 		for end := time.Now().Add(killFor); time.Now().Before(end); {
 			time.Sleep(5 * time.Millisecond)
-			if signal(pgid) != nil {
+			if err := signal(pgid); err != nil {
+				g.refused(pgid, err)
 				return
 			}
 		}
@@ -59,9 +67,20 @@ func (group) kill(cmd *exec.Cmd) <-chan struct{} {
 	return gone
 }
 
+// refused says the group could not be signalled: the processes are still
+// there, and the memory they hold is not free. A group that is gone says
+// so otherwise (ESRCH).
+func (g *group) refused(pgid int, err error) {
+	if errors.Is(err, syscall.ESRCH) {
+		return // none of it is left
+	}
+	g.fail(err)
+	log.Printf("proc: the group %d could not be ended: %v", pgid, err)
+}
+
 // term asks the command alone to end: what it started is ended with the
 // group once it has.
-func (group) term(cmd *exec.Cmd) error { return cmd.Process.Signal(syscall.SIGTERM) }
+func (*group) term(cmd *exec.Cmd) error { return cmd.Process.Signal(syscall.SIGTERM) }
 
 // signalGroup kills the group pgid leads; a var so a test can have it miss.
 // Readers take it once at kill's entry, never from the loop's goroutine.
@@ -72,4 +91,4 @@ var killFor = 10 * time.Second
 
 // sweep ends what is left of the group once its leader is gone: the group
 // keeps the leader's pid while any of it runs, so none else has it.
-func (g group) sweep(cmd *exec.Cmd) { _ = g.kill(cmd) }
+func (g *group) sweep(cmd *exec.Cmd) { _ = g.kill(cmd) }

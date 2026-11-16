@@ -4,6 +4,7 @@ package proc
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -116,4 +117,36 @@ func TestTreeStopKillsOneThatStays(t *testing.T) {
 		t.Fatalf("its child %d outlived Stop", child)
 	}
 	tree.Kill() // ended already: a no-op
+}
+
+// A tree that could not be ended says why: the signal was refused, so the
+// processes are still there and the memory they hold is not free (#6599).
+func TestTreeStopErrSaysTheSignalWasRefused(t *testing.T) {
+	// the command ignores the signal it is asked to end with, so the
+	// grace passes and the tree is killed: that is where the refused
+	// signal is
+	tree, child := startSh(t, `sleep 600 >/dev/null 2>&1 & echo $!; trap '' TERM; while :; do sleep 0.02; done`)
+	old := signalGroup
+	// the tree is ended with the real signal when the test ends, so
+	// nothing of it is left running and no other test sees the refusal
+	t.Cleanup(func() {
+		signalGroup = old
+		tree.Kill()
+	})
+	signalGroup = func(int) error { return syscall.EPERM }
+	go func() { _ = tree.Wait() }()
+	<-tree.Stop(50 * time.Millisecond)
+	err := tree.StopErr()
+	alive := syscall.Kill(child, 0) == nil
+	signalGroup = old
+	tree.Kill()
+	if err == nil {
+		t.Fatal("a tree whose signal was refused said nothing")
+	}
+	if !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("the tree said %v, want the refused signal", err)
+	}
+	if !alive {
+		t.Fatal("the child was ended: the signal was refused")
+	}
 }

@@ -1780,7 +1780,14 @@ may use (`memLimit` on Linux, `proc.MemTotal` elsewhere), at least 1 GiB,
 Each Claude Code a run starts logs its pid and model when it starts, and its
 run time, how it ended and its peak RSS (`proc.PeakRSS`, rusage
 `ru_maxrss`; not on Windows) when it ends: an OOM report's pid can be found
-in magpie's log.
+in magpie's log. In the interactive mode the pid is magpie's own
+`claude-tui-helper`, which runs Claude Code under it: the tree's memory is
+read, but the pid in the log is the helper's, and Claude Code's own pid is
+not in it (#6599).
+
+A run whose tree could not be ended says so: the signal was refused (a
+container's AppArmor denies it), the processes are still there, and the
+memory they hold is not free (`proc.Tree.StopErr`, #6599).
 
 ## The run's working folder (`clientWorkDir`)
 

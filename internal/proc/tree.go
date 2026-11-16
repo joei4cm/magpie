@@ -1,6 +1,9 @@
 package proc
 
 import (
+	"errors"
+	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -18,6 +21,37 @@ type Tree struct {
 	stopped chan struct{} // Stop's, closed once it has ended the tree
 	group
 }
+
+// A failure is why a tree could not be ended: the signal was refused (the
+// container's AppArmor, #6599), so the processes are still there and the
+// memory they hold is not free.
+type failure struct {
+	mu  sync.Mutex
+	err error
+}
+
+// fail remembers why a tree could not be ended, the first reason given.
+func (f *failure) fail(err error) {
+	if err == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err == nil {
+		f.err = err
+	}
+}
+
+// why is why a tree could not be ended, if it could not be.
+func (f *failure) why() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
+// StopErr is why the tree could not be ended, if it could not be: the
+// signal was refused, and its processes are still there (#6599).
+func (t *Tree) StopErr() error { return t.group.why() }
 
 // StartTree starts cmd in a group of its own: a session on Unix, a job on
 // Windows. It has no terminal then, and a Ctrl+C there doesn't reach it.
@@ -52,7 +86,18 @@ func (t *Tree) Kill() {
 		return
 	}
 	_ = t.kill(t.cmd)
-	_ = t.cmd.Process.Kill()
+	t.killRoot()
+}
+
+// killRoot ends the command itself, and remembers why it could not be
+// ended: the signal was refused and it is still there (#6599).
+func (t *Tree) killRoot() {
+	err := t.cmd.Process.Kill()
+	if err == nil || errors.Is(err, os.ErrProcessDone) {
+		return
+	}
+	t.group.fail(err)
+	log.Printf("proc: the command %d could not be ended: %v", t.cmd.Process.Pid, err)
 }
 
 // Stop asks the command to end, so it can clean up first, and ends its tree
@@ -72,7 +117,7 @@ func (t *Tree) Stop(grace time.Duration) <-chan struct{} {
 	if t.done || t.term(t.cmd) != nil {
 		if !t.done {
 			_ = t.kill(t.cmd)
-			_ = t.cmd.Process.Kill()
+			t.killRoot()
 		}
 		close(t.stopped)
 		return t.stopped
