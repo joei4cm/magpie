@@ -2,11 +2,12 @@ package proc
 
 import "os/exec"
 
-// RSS is the memory the tree holds resident, in bytes: its command's on
-// Unix, every process of its job on Windows, where an npm install's
-// claude.cmd is a cmd.exe with the node under it. False when it can't be
-// read, or the command was waited for: its pid may be another process's
-// by then.
+// RSS is the memory the tree holds resident, in bytes: every process of
+// it, the command and what it started and what they started, on Unix; the
+// working sets of every process of its job on Windows, where an npm
+// install's claude.cmd is a cmd.exe with the node under it. False when it
+// can't be read, or the command was waited for: its pid may be another
+// process's by then.
 func (t *Tree) RSS() (int64, bool) {
 	t.mu.Lock()
 	if t.done || t.cmd.Process == nil {

@@ -1754,12 +1754,16 @@ service that is never restarted kept one for days: on a 31 GiB host a
 killer took the machine's other work with it.
 
 Each time a run's reply ends, `oversized` (`claude_rss.go`) reads the
-resident memory of its process tree (`proc.Tree.RSS`: `/proc/<pid>/status`
-VmRSS on Linux, `ps -o rss=` on macOS, the working sets of every process in
-its job on Windows, where an npm install's `claude.cmd` is a cmd.exe with
-the node under it) and logs it with the pid. The budget is an eighth of the
-memory magpie may use (`memLimit` on Linux, `proc.MemTotal` elsewhere), at
-least 1 GiB, 4 GiB where neither is known. It is read once per process.
+resident memory of its process tree (`proc.Tree.RSS`: every process of it —
+the command, what it started and what they started — on Unix, the working
+sets of every process in its job on Windows, where an npm install's
+`claude.cmd` is a cmd.exe with the node under it) and logs it with the pid.
+The tree is what a run holds and what ending it frees: the interactive
+mode's tree is magpie's own `claude-tui-helper` with Claude Code under it,
+in a session of its own, and reading the helper alone gave a run a sixth
+of the memory it holds (#6599). The budget is an eighth of the memory magpie
+may use (`memLimit` on Linux, `proc.MemTotal` elsewhere), at least 1 GiB,
+4 GiB where neither is known. It is read once per process.
 
 - A whole turn (`ended`, stop) over the budget: the run is not kept idle.
   Its session is shelved at the conversation's key (`letGoOversized`), and
