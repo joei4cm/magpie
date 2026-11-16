@@ -31,6 +31,49 @@ const (
 // claudeRunRSS reads a run's resident memory, for tests to give one.
 var claudeRunRSS = func(t *proc.Tree) (int64, bool) { return t.RSS() }
 
+// claudeRunMemory is the resident memory of the Claude Code runs that are
+// live, each as it was measured after its last turn: how much one holds
+// on this machine, and so how many may run at once (#6599).
+var claudeRunMemory = struct {
+	sync.Mutex
+	runs map[*subscriptionRun]int64
+}{runs: map[*subscriptionRun]int64{}}
+
+// noteRunMemory remembers what a run holds, and forgets a run that ended:
+// the size a run is given for the count is what the runs that are live
+// hold, not a number written down before.
+func noteRunMemory(run *subscriptionRun, rss int64) {
+	if run == nil || rss <= 0 {
+		return
+	}
+	claudeRunMemory.Lock()
+	defer claudeRunMemory.Unlock()
+	claudeRunMemory.runs[run] = rss
+}
+
+// forgetRunMemory forgets what a run held: it ended, and its memory is
+// free.
+func forgetRunMemory(run *subscriptionRun) {
+	claudeRunMemory.Lock()
+	defer claudeRunMemory.Unlock()
+	delete(claudeRunMemory.runs, run)
+}
+
+// claudeRunSize is the memory a Claude Code run holds on this machine: the
+// largest one measured among the runs that are live, and claudeRunMiB
+// until one of them has been measured.
+func claudeRunSize() int64 {
+	claudeRunMemory.Lock()
+	defer claudeRunMemory.Unlock()
+	size := int64(claudeRunMiB) << 20
+	for _, rss := range claudeRunMemory.runs {
+		if rss > size {
+			size = rss
+		}
+	}
+	return size
+}
+
 var runBudget struct {
 	sync.Once
 	n   int64
@@ -73,6 +116,7 @@ func (r *subscriptionRun) oversized(share int64) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	noteRunMemory(r, rss)
 	budget, why := claudeRunBudget()
 	budget = budget * share / 2
 	log.Printf("claude: Claude Code pid %d (%s) holds %d MiB after its turn; %d MiB may be kept (%s)", r.pid(), r.model, rss>>20, budget>>20, why)

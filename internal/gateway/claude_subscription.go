@@ -6695,6 +6695,7 @@ func (r *subscriptionRun) finish() {
 	ch := r.segment
 	r.segment = nil
 	r.mu.Unlock()
+	forgetRunMemory(r)
 	for _, waiter := range pending {
 		close(waiter)
 	}

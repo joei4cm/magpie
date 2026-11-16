@@ -29,17 +29,27 @@ func freshRoom(t *testing.T, most int) {
 	old := claudeRoom
 	claudeRoom = &claudeRoomT{freed: make(chan struct{})}
 	memRuns.Lock()
-	known, n, why := memRuns.known, memRuns.n, memRuns.why
-	memRuns.known, memRuns.n, memRuns.why = true, 0, ""
+	known, limit, why := memRuns.known, memRuns.limit, memRuns.why
+	memRuns.known, memRuns.limit, memRuns.why = true, 0, ""
 	memRuns.Unlock()
+	// what the runs that are live hold is measured as they go: it is put
+	// back as it was, or a later test's count is sized by another test's
+	// runs
+	claudeRunMemory.Lock()
+	runs := claudeRunMemory.runs
+	claudeRunMemory.runs = map[*subscriptionRun]int64{}
+	claudeRunMemory.Unlock()
 	// the package's tests share one settings.json: the bound is put back
 	// as it was, or later tests' runs wait for room
 	was := settings.Load().ClaudeRunsMost
 	t.Cleanup(func() {
 		claudeRoom = old
 		memRuns.Lock()
-		memRuns.known, memRuns.n, memRuns.why = known, n, why
+		memRuns.known, memRuns.limit, memRuns.why = known, limit, why
 		memRuns.Unlock()
+		claudeRunMemory.Lock()
+		claudeRunMemory.runs = runs
+		claudeRunMemory.Unlock()
 		setRunsMost(t, was)
 	})
 	setRunsMost(t, most)
@@ -259,7 +269,7 @@ func TestClaudeMemRunsFromTheCgroup(t *testing.T) {
 	if limit != 536870912 || !strings.Contains(why, "memory.max") {
 		t.Fatalf("limit %d (%s)", limit, why)
 	}
-	if n := runsFor(limit); n != 2 {
+	if n := runsFor(limit, claudeRunMiB<<20); n != 2 {
 		t.Fatalf("512 MiB holds %d", n)
 	}
 
@@ -273,7 +283,7 @@ func TestClaudeMemRunsFromTheCgroup(t *testing.T) {
 	if limit != 987728<<10 || why != "MemTotal" {
 		t.Fatalf("limit %d (%s)", limit, why)
 	}
-	if n := runsFor(limit); n != 5 {
+	if n := runsFor(limit, claudeRunMiB<<20); n != 5 {
 		t.Fatalf("964 MiB holds %d", n)
 	}
 
@@ -286,12 +296,12 @@ func TestClaudeMemRunsFromTheCgroup(t *testing.T) {
 	if limit, why = memLimit("linux", root); limit != 1<<30 {
 		t.Fatalf("v1 limit %d (%s)", limit, why)
 	}
-	if n := runsFor(limit); n != 6 {
+	if n := runsFor(limit, claudeRunMiB<<20); n != 6 {
 		t.Fatalf("1 GiB holds %d", n)
 	}
 
 	// so little the reserve takes it all: 1 still runs
-	if n := runsFor(200 << 20); n != 1 {
+	if n := runsFor(200<<20, claudeRunMiB<<20); n != 1 {
 		t.Fatalf("200 MiB holds %d", n)
 	}
 }
@@ -386,6 +396,38 @@ func TestClaudeRunsMostTheUsersOwn(t *testing.T) {
 	setRunsMost(t, 5)
 	if n, why := claudeRunsMost(); n != 5 || !strings.Contains(why, "settings") {
 		t.Fatalf("the user's 5 gave %d (%s)", n, why)
+	}
+}
+
+// The count of runs is sized by what a run holds: a run measured at 256
+// MiB takes twice the room of the 128 MiB one the count was written for,
+// and a machine's memory holds fewer of them (#6599).
+func TestClaudeRunsMostFollowsTheMeasuredRun(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	freshRoom(t, 0)
+	memRuns.Lock()
+	memRuns.known = false
+	memRuns.Unlock()
+	oldGOOS, oldRoot := memGOOS, memRoot
+	memGOOS, memRoot = "linux", memFixture(t, map[string]string{
+		"proc/meminfo":     "MemTotal:         1048576 kB\n",
+		"proc/self/cgroup": "0::/system.slice/magpie.service\n",
+		"sys/fs/cgroup/system.slice/magpie.service/memory.max":  "1073741824\n",
+		"sys/fs/cgroup/system.slice/magpie.service/memory.high": "max\n",
+		"sys/fs/cgroup/system.slice/memory.max":                 "max\n",
+	})
+	t.Cleanup(func() { memGOOS, memRoot = oldGOOS, oldRoot })
+	if n, why := claudeRunsMost(); n != 6 {
+		t.Fatalf("a 1 GiB machine held %d runs (%s), want the 6 of a 128 MiB run", n, why)
+	}
+	run := &subscriptionRun{}
+	noteRunMemory(run, 256<<20)
+	if n, why := claudeRunsMost(); n != 3 {
+		t.Fatalf("a run holding 256 MiB gave %d runs (%s), want 3", n, why)
+	}
+	forgetRunMemory(run)
+	if n, why := claudeRunsMost(); n != 6 {
+		t.Fatalf("the run ended and the count stayed at %d (%s)", n, why)
 	}
 }
 

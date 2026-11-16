@@ -84,7 +84,8 @@ func ClaudeMemRuns() (int, string) { return claudeMemRuns() }
 
 // The memory a Claude Code process is given, and what is kept for magpie
 // and the rest of the machine, as the bound is sized from memory: 512 MiB
-// holds 2, 1 GiB 6.
+// holds 2, 1 GiB 6, until a run is measured and the memory it holds is
+// what the count is sized by.
 const (
 	claudeRunMiB     = 128
 	claudeReserveMiB = 256
@@ -93,33 +94,41 @@ const (
 var memRuns struct {
 	sync.Mutex
 	known bool
-	n     int
+	limit int64
 	why   string
 }
 
 // claudeMemRuns is how many Claude Code processes this machine's memory
-// holds: (limit - claudeReserveMiB) / claudeRunMiB, 1 at least, the
-// limit the least of the cgroup's memory.max and memory.high (v1: its
+// holds: (limit - claudeReserveMiB) / the memory a run holds, 1 at least,
+// the limit the least of the cgroup's memory.max and memory.high (v1: its
 // memory.limit_in_bytes) and MemTotal. A machine whose memory can't be
 // read, or that isn't Linux, has no bound from it (0): a limit not known
-// is not a small one. It is read once.
+// is not a small one. The limit is read once; the memory a run holds is
+// measured as the runs go (#6599: a run was given 128 MiB and held 300,
+// so a 4 GiB container's 30 runs would have taken 9 GiB).
 func claudeMemRuns() (int, string) {
 	memRuns.Lock()
 	defer memRuns.Unlock()
 	if !memRuns.known {
 		memRuns.known = true
-		if limit, why := memLimit(memGOOS, memRoot); limit > 0 {
-			n := runsFor(limit)
-			memRuns.n = n
-			memRuns.why = fmt.Sprintf("%d MiB of memory (%s) holds %d", limit>>20, why, n)
-		}
+		memRuns.limit, memRuns.why = memLimit(memGOOS, memRoot)
 	}
-	return memRuns.n, memRuns.why
+	if memRuns.limit <= 0 {
+		return 0, ""
+	}
+	size := claudeRunSize()
+	n := runsFor(memRuns.limit, size)
+	return n, fmt.Sprintf("%d MiB of memory (%s) holds %d (a Claude Code run holds %d MiB)", memRuns.limit>>20, memRuns.why, n, size>>20)
 }
 
-// runsFor is how many Claude Code processes limit bytes of memory hold.
-func runsFor(limit int64) int {
-	return max(int((limit>>20-claudeReserveMiB)/claudeRunMiB), 1)
+// runsFor is how many Claude Code processes limit bytes of memory hold,
+// each of them the size a run holds.
+func runsFor(limit, size int64) int {
+	mib := size >> 20
+	if mib < 1 {
+		mib = claudeRunMiB
+	}
+	return max(int((limit>>20-claudeReserveMiB)/mib), 1)
 }
 
 // memGOOS and memRoot are the system memLimit reads, and the root its

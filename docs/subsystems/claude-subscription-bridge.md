@@ -1681,11 +1681,15 @@ How many may run (`claudeRunsMost`):
 - the user's `claudeRunsMost` in settings.json, set with
   `magpie claude-code runs N` (`auto` clears it). It is this machine's own
   setting (`KeepOwn`): a sync never brings a desktop's number to a server.
-- otherwise, on Linux, `(limit − 256 MiB) / 128 MiB`, at least 1, where
-  the limit is the least of MemTotal, the cgroup v2 `memory.max` and
+- otherwise, on Linux, `(limit − 256 MiB) / the memory a run holds`, at least
+  1, where the limit is the least of MemTotal, the cgroup v2 `memory.max` and
   `memory.high` of magpie's cgroup and every one above it, and the cgroup v1
   `memory.limit_in_bytes` (`memLimit`). 512 MiB gives 2, 1 GiB 6, a 964 MiB
-  machine with no cgroup limit 5. It is read once per process.
+  machine with no cgroup limit 5. The limit is read once per process. The
+  memory a run holds is what the runs that are live were measured at
+  (`claudeRunSize`), 128 MiB until one of them has been measured: a run was
+  given 128 MiB and held 300, so a 4 GiB container's 30 runs would have
+  taken 9 GiB of it (#6599).
 - otherwise no bound: macOS, Windows, and a Linux whose limits can't be
   read. A limit not known is not a small one.
 

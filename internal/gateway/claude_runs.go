@@ -99,6 +99,7 @@ func (b *subscriptionBridge) claudeRunList() ClaudeRuns {
 		if tree != nil {
 			if rss, ok := claudeRunRSS(tree); ok {
 				c.RSS = rss
+				noteRunMemory(r, rss)
 			}
 		}
 		out.Runs = append(out.Runs, c)
