@@ -3,6 +3,11 @@
 // built-in's plugin does.
 const ID = process.env.FAKE_ID || "fakeco"
 
+// burst is what the models hook holds in one synchronous step, kept for
+// the host's life: a plugin that reads a whole file into memory for every
+// call, as the one behind #6458 unzips a big trace in a single call.
+let burst
+
 // born is when the host loaded the plugin. The accounts' windows renew at
 // times set from it, as a vendor's are: read again, an account renews when
 // it did, so two accounts read either side of an hour aren't an hour apart
@@ -399,6 +404,14 @@ export const FakePlugin = async ({ client }) => ({
   provider: {
     id: ID,
     models: async (p, { auth }) => {
+      // $FAKE_BURST_MB: the hook holds that many MiB in one synchronous
+      // step and goes on holding them, as a plugin that unzips a big file
+      // in a single call does (#6458). The event loop is not running while
+      // it does, so the host's own look of its memory cannot see it.
+      if (process.env.FAKE_BURST_MB && !burst) {
+        burst = []
+        for (let i = 0; i < Number(process.env.FAKE_BURST_MB); i++) burst.push(new Uint8Array(1 << 20).fill(1))
+      }
       // $FAKE_MODELS_LOG: each time the hook is asked is a line there
       if (process.env.FAKE_MODELS_LOG) (await import("node:fs")).appendFileSync(process.env.FAKE_MODELS_LOG, "asked " + (auth?.refresh ?? auth?.key ?? "-") + "\n")
       if (auth?.refresh === "r-dead" || auth?.key === "dead") throw new Error("the vendor refused the sign-in")

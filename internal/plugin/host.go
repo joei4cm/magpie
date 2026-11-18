@@ -1037,6 +1037,10 @@ func getLocked(ctx context.Context) (*host, error) {
 		return nil, err
 	}
 	current = h
+	// the parent's own look at the child's memory starts here, where the
+	// host is the one calls go to and its plugins are loaded: a burst is
+	// measured from the memory it holds now (watchMemory)
+	go h.watchMemory()
 	return h, nil
 }
 
@@ -1313,9 +1317,10 @@ var (
 // requests, 4 at a time, a host holds 84 to 236 MiB, so the bound leaves
 // room for that twice over.
 //
-// The host is looked at every heavyFast, from its first moment. It used
-// to be looked at from heavyAfter (ten minutes) after the host started,
-// and every heavyEvery (a minute) after that: a host that grew a
+// The host is looked at every heavyFast, from its first moment, and the
+// parent looks at the child's own memory every heavySample beside it. It
+// used to be looked at from heavyAfter (ten minutes) after the host
+// started, and every heavyEvery (a minute) after that: a host that grew a
 // gigabyte in two seconds was ended by the system before either could see
 // it, and the guard never fired at all (#6458: 930 host starts over a
 // day, 70 of them killed by the kernel's OOM killer, and not one of them
@@ -1323,6 +1328,18 @@ var (
 var (
 	heavyMB   = 512
 	heavyFast = time.Second
+	// heavySample is how often the parent looks at the child's resident
+	// memory. A call that holds the event loop — one that unzips a big
+	// file in a single step, as the plugin behind #6458 does — leaves the
+	// host's own look unable to run while its memory goes up: measured on
+	// the reporter's box, 27 MiB before a 520 MiB allocation and 1045 MiB
+	// after it, with the host's timer not once fired in between. The
+	// parent's poll waits on nothing the child is doing, so it sees the
+	// burst while it happens. It reads what proc.Tree.RSS reads — the
+	// host's own process, as the host's own look does, and its whole job
+	// on Windows — which is a /proc read on Linux and a ps elsewhere. Read
+	// when the host's look starts.
+	heavySample = 500 * time.Millisecond
 	// heavyEvery is how often a host may be replaced for holding too much:
 	// a plugin that holds that much for every call would otherwise have a
 	// host replaced after every call, and each replacement loads every
@@ -1331,7 +1348,9 @@ var (
 	// heavyGrow is how much more memory a host may hold between two looks
 	// before it is replaced without waiting for its turn: 25 to 30 MB
 	// every 50 ms in the report that came with #6458, and a box that
-	// little room has none to spare.
+	// little room has none to spare. The parent's look counts as one of
+	// the two, and it is the one that sees a burst the child's own look
+	// is blocked out of (heavySample).
 	heavyGrow = 128
 )
 
@@ -1384,6 +1403,51 @@ func (h *host) recycle() bool {
 }
 
 var recycles atomic.Int64
+
+// watchMemory looks at the child's resident memory every heavySample and
+// replaces the host when it grew by heavyGrow since the look before: the
+// same burst rule the host's own look applies, from the one place a
+// synchronous call cannot block (heavySample). The calls the host is
+// answering finish on it (recycle), so a burst mid-call is not cut off.
+// It ends when the host does.
+//
+// A host that is no longer the one calls go to is left alone, and what it
+// held at the look before is forgotten: a host on its way out is never
+// replaced for what its replacement does. The first look is the host's
+// own, taken as it becomes the host calls go to, so the growth a burst is
+// measured against is the memory the host held before it. The plugin load
+// that comes before that is not a burst and is not measured.
+func (h *host) watchMemory() {
+	if h.tree == nil {
+		return
+	}
+	sample := heavySample
+	tick := time.NewTicker(sample)
+	defer tick.Stop()
+	var last int64
+	for {
+		rss, ok := h.tree.RSS()
+		if ok && h.isCurrent() {
+			if last > 0 {
+				if grew := int((rss - last) >> 20); grew >= heavyGrow && heavyAllowed(grew) {
+					go func() {
+						if h.recycle() {
+							log.Printf("plugin: the host grew %d MiB in %s; a new one takes the next calls", grew, sample)
+						}
+					}()
+				}
+			}
+			last = rss
+		} else {
+			last = 0
+		}
+		select {
+		case <-h.dead:
+			return
+		case <-tick.C:
+		}
+	}
+}
 
 // drainStderr logs the child's stderr a line at a time. A line over 4 MiB
 // stops the scanner; the rest is read and dropped, so the child is never left

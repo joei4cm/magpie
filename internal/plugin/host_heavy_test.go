@@ -115,6 +115,60 @@ func TestHeavyBurstIsNotWaitedFor(t *testing.T) {
 	}
 }
 
+// A host that bursts — one synchronous call that holds 256 MiB and goes
+// on holding them — is replaced from the parent's look at its memory, not
+// from the host's own: the call holds the child's event loop, so the
+// host's timer cannot fire while its memory goes up (#6458: 27 MiB before
+// a 520 MiB allocation and 1045 MiB after it on the reporter's box, with
+// the host's timer not once fired in between).
+//
+// Only the parent's growth rule can replace this host: the bound is put
+// out of reach, so the host's own look has nothing to say about one under
+// it however long it looks. The parent's own cadence is the host's, so a
+// burst has to grow heavyGrow in it, which 256 MiB allocated in one call
+// does on any box that writes memory at 128 MiB a second.
+func TestHeavyBurstIsSeenFromTheParent(t *testing.T) {
+	wasMB, wasSample, wasGrow := heavyMB, heavySample, heavyGrow
+	heavyMB, heavySample, heavyGrow = 1<<20, time.Second, 128
+	t.Cleanup(func() { heavyMB, heavySample, heavyGrow = wasMB, wasSample, wasGrow })
+	sandbox(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	t.Setenv("FAKE_BURST_MB", "256")
+	abs, _ := filepath.Abs("testdata/fake/index.js")
+	if _, err := Add(ctx, abs); err != nil {
+		t.Fatal(err)
+	}
+	was := recycles.Load()
+	if _, err := Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(30 * time.Second)
+	for recycles.Load() == was {
+		if time.Now().After(until) {
+			t.Fatal("a host that grew 256 MiB in one call was not replaced 30s on")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// the host that burst is the one that ends, and a new one answers
+	until = time.Now().Add(30 * time.Second)
+	for {
+		hostMu.Lock()
+		n := len(retiring)
+		hostMu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatal("the host that burst was still finishing its calls 30s on")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := Call(ctx, "providers", map[string]any{}, nil); err != nil {
+		t.Fatalf("a call after the host that burst was replaced: %v", err)
+	}
+}
+
 // A host past its memory bound is replaced from its first moment. The
 // guard used to look at a host only ten minutes after it started, so a
 // host that grew a gigabyte in two seconds was ended by the system before
