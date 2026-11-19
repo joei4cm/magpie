@@ -57,3 +57,37 @@ func TestACreditsPoolUsedUpIsNoShareUsed(t *testing.T) {
 		t.Fatalf("one allowance over two spans, the short one used up: %v%% used, want 100", used)
 	}
 }
+
+// #2878 (LUDA0831, v0.1.3871): the plugin since plugins#454 tells the
+// pools spent in turn as windows set aside beside their Total credits, so
+// a card reads Total credits with room beside a dedicated package used up
+// (act-20261007-561, 1000 / 1000, a campaign's Qwen credits). The package
+// drowned the Total pool in For — the trace said used 100, amount 1000,
+// limit 1000 — and Smart kept the account for last while Qoder answered
+// on its Total credits. The plugin tells no span, so both pools are the
+// same (none) long and the used-up one is no share used.
+func TestAUsedUpDedicatedPackageIsNoShareUsed(t *testing.T) {
+	now := time.Now()
+	until := now.Add(11 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	card := func(totalUsed, totalLimit float64, totalDisplay string) Allowance {
+		// the Qoder plugin's usage answer (packages/qoder/index.mjs,
+		// parseUsage): Total credits first, the pools spent in turn set
+		// aside, the dedicated package after
+		return PluginAllowanceForTest([]byte(`{"plan":"personal_professional","windows":[`+
+			`{"name":"Total credits","used":`+jsonNum(100*totalUsed/totalLimit)+`,"amount":`+jsonNum(totalUsed)+`,"limit":`+jsonNum(totalLimit)+`,"unit":"credits","resetsAt":"`+until+`","display":"`+totalDisplay+`"},`+
+			`{"name":"Credits","used":37.1,"amount":742,"limit":2000,"unit":"credits","resetsAt":"`+until+`","display":"742 / 2,000 credits","aside":true},`+
+			`{"name":"Add-on credits","used":33.333333,"amount":1000,"limit":3000,"unit":"credits","display":"1,000 / 3,000 credits","aside":true},`+
+			`{"name":"act-20261007-561","used":100,"amount":1000,"limit":1000,"unit":"credits","display":"1,000 / 1,000 credits"}]}`), now)
+	}
+	near := func(used, want float64) bool { return used > want-0.01 && used < want+0.01 }
+
+	// the reporter's card: the dedicated package used up, Total credits
+	// (1742 / 5000) with room
+	if used, _ := card(1742, 5000, "1,742 / 5,000 credits").For("dfmodel", now); !near(used, 34.84) {
+		t.Fatalf("dedicated package used up, Total credits left: %v%% used, want the Total pool's 34.84", used)
+	}
+	// the Total pool used up too: out as before
+	if used, _ := card(5000, 5000, "5,000 / 5,000 credits").For("dfmodel", now); !near(used, 100) {
+		t.Fatalf("dedicated package and Total credits both used up: %v%% used, want 100", used)
+	}
+}
