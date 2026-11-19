@@ -325,6 +325,9 @@ const (
 	quote = `(?:\\?["'])?`
 	// secretCh are the characters of a secret's value
 	secretCh = `[A-Za-z0-9_\-./+=~!@#%^&*]`
+	// secretChar are the characters of a secret's value, as a set to look
+	// one for in a text (secretCh is the same set as a pattern)
+	secretChar = alnum + "_-.+=~!@#%^&*"
 )
 
 // placeholderRe is a placeholder as Mask writes it.

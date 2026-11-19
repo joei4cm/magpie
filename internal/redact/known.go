@@ -28,6 +28,13 @@ import (
 // for a password in an assignment asks of its value.
 const minKnown = 8
 
+// minCut is the shortest cut value masked: a known value's own beginning,
+// where the text stops before the value ends. A secret's beginning of
+// sixteen characters or more is no ordinary text by chance: a password of
+// "password1" cut to eight is the word "password", which is in every text
+// about a password, and would be masked everywhere.
+const minCut = 16
+
 type knownValue struct{ v, p, kind string }
 
 var (
@@ -195,7 +202,9 @@ func knownSpans(s string, o Options) []span {
 			continue
 		}
 		var best *knownValue
-		for j, k := range known[s[i:i+minKnown]] {
+		bestLen, bestWhole := 0, false
+		for j := range known[s[i:i+minKnown]] {
+			k := &known[s[i:i+minKnown]][j]
 			if !o.coversKind(k.kind) {
 				continue
 			}
@@ -209,23 +218,62 @@ func knownSpans(s string, o Options) []span {
 				// (drizzle-orm, dniray on Discord, v0.1.1976)
 				continue
 			}
-			if best != nil && len(k.v) <= len(best.v) || !strings.HasPrefix(s[i:], k.v) || !standsAlone(k.kind, s, i, i+len(k.v)) {
+			n, whole := len(k.v), true
+			if !strings.HasPrefix(s[i:], k.v) {
+				// the value was cut off in the middle: what is there is
+				// its own beginning, and no rule finds it (a tool's output
+				// cut at 200 characters, #7239). A secret's beginning is
+				// the secret still; personal data's own rules judge it (an
+				// IBAN with a checksum off by one is no IBAN, and the last
+				// of its characters cut off is no more of one).
+				if len(kindCats[k.kind]) > 0 {
+					continue
+				}
+				n = cutLength(s[i:], k.v)
+				if n < minCut {
+					continue
+				}
+				whole = false
+			}
+			if n < bestLen || n == bestLen && bestWhole && !whole {
+				continue // a longer one wins, and a whole value a cut one
+			}
+			if !standsAlone(k.kind, s, i, i+n) {
 				continue
 			}
-			if packageAt(s, i, i+len(k.v)) {
+			if packageAt(s, i, i+n) {
 				// the module an import loads, a manifest's dependency:
 				// what masked it before had taken a package's name for a
 				// secret (dniray, v0.1.1965)
 				continue
 			}
-			best = &known[s[i:i+minKnown]][j]
+			best, bestLen, bestWhole = k, n, whole
 		}
 		if best != nil {
-			out = append(out, span{i, i + len(best.v), best.kind, ByKnown, 0, false})
-			i += len(best.v) - 1
+			out = append(out, span{i, i + bestLen, best.kind, ByKnown, 0, false})
+			i += bestLen - 1
 		}
 	}
 	return out
+}
+
+// cutLength is how much of the known value v the text s shows, where the
+// value was cut off in the middle: the beginning of v, where the text
+// stops (it ends there, or a character that is no part of a secret's value
+// follows). Zero where s holds the whole value, and where it goes on with
+// characters of its own: that is another value, not a cut one.
+func cutLength(s, v string) int {
+	m := 0
+	for m < len(s) && m < len(v) && s[m] == v[m] {
+		m++
+	}
+	if m == len(v) {
+		return 0 // the whole value is there
+	}
+	if m < len(s) && strings.IndexByte(secretChar, s[m]) >= 0 {
+		return 0 // the text goes on with characters of its own
+	}
+	return m
 }
 
 // standsAlone says s[a:b] is the known value itself, not a piece of a
