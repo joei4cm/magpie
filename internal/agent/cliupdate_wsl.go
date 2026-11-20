@@ -19,7 +19,9 @@ import (
 var wslProbes memo
 
 // wslCLIScript says, for the first of the paths $@ that is a program: where
-// it is, where its links lead, what it said to --version and its exit code.
+// it is, where its links lead, what it said to --version — stdout and
+// stderr apart, only its own stdout being its version (#7371) — and its
+// exit code.
 const wslCLIScript = `for c in "$@"; do case "$c" in /*) ;; *) c=$(command -v "$c" 2>/dev/null);; esac
   if [ -n "$c" ] && [ -x "$c" ] && [ ! -d "$c" ]; then b="$c"; break; fi; done
 [ -n "$b" ] || exit 0
@@ -29,13 +31,19 @@ echo "real:$r"
 # wsl.exe -e has no login PATH: a node CLI finds its node beside it, in its
 # npm prefix, or where a user's tools are
 PATH="$(dirname "$b"):${r%%/lib/node_modules/*}/bin:$HOME/.local/bin:$HOME/.bun/bin:$PATH"
-o=$("$b" --version 2>&1 </dev/null); c=$?
+t=$(mktemp 2>/dev/null || echo /tmp/magpie-wslver.$$)
+o=$("$b" --version 2>"$t" </dev/null); c=$?
+e=$(cat "$t" 2>/dev/null); rm -f "$t"
 echo "code:$c"
-echo "ver:$(printf %s "$o" | head -n 3 | tr '\n' ' ')"`
+echo "ver:$(printf %s "$o" | head -n 3 | tr '\n' ' ')"
+echo "err:$(printf %s "$e" | head -n 8 | tr '\n' ' ')"`
 
-// wslCLI is what a distro said of a CLI.
+// wslCLI is what a distro said of a CLI: out is the CLI's own stdout
+// (what version reads), err its stderr — a stack under Node's banner is
+// there, and isn't the CLI's version (#7371).
 type wslCLI struct {
 	bin, real, out string
+	err            string
 	code           int
 }
 
@@ -102,6 +110,8 @@ func askWSLCLI(d distro, kind string, spec cliSpec) (wslCLI, bool) {
 			fmt.Sscan(v, &w.code)
 		case "ver":
 			w.out = v
+		case "err":
+			w.err = v
 		}
 	}
 	return w, w.bin != ""
@@ -282,7 +292,7 @@ func (a *Agent) updateWSL() (CLI, error) {
 	// the package says its new version, but that isn't the CLI running
 	// (cliupdate.go's runsBroken)
 	if n, _ := askWSLCLI(d, kind, spec); n.code > 0 && n.code != 127 && n.version() == "" {
-		return c, fmt.Errorf("%s was updated, but %s --version fails: %s — %s", a.Name, path.Base(w.bin), lastLines(n.out, 2), mendHint(u, c.Version))
+		return c, fmt.Errorf("%s was updated, but %s --version fails: %s — %s", a.Name, path.Base(w.bin), lastLines(n.out+"\n"+n.err, 2), mendHint(u, c.Version))
 	}
 	return c, nil
 }

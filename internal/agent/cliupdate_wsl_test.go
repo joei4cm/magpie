@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -107,5 +109,42 @@ func TestWSLAgentCLIVersionAndUpdate(t *testing.T) {
 	}
 	if asked["Stopped"] != before {
 		t.Fatalf("a stopped distro was asked %d times", asked["Stopped"]-before)
+	}
+}
+
+// The distro probe's ver: is the CLI's own stdout: a node CLI broken by
+// a missing optional package prints its stack under Node's banner on
+// stderr, and that isn't the CLI's version (#7371), as runsBroken reads
+// it on the host. The stack is kept for the failure's message.
+func TestWSLProbeVersionIsTheCLIsStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script")
+	}
+	dir := t.TempDir()
+	bin := file(t, filepath.Join(dir, "codex"),
+		"#!/bin/sh\necho 'Error: Missing optional dependency @openai/codex-darwin-arm64.' >&2\necho 'Node.js v24.15.0' >&2\nexit 1\n")
+	out, err := exec.Command("sh", "-c", wslCLIScript, "sh", bin).Output()
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	var ver, code, said string
+	for _, l := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(l, "ver:"):
+			ver = strings.TrimPrefix(l, "ver:")
+		case strings.HasPrefix(l, "code:"):
+			code = strings.TrimPrefix(l, "code:")
+		case strings.HasPrefix(l, "err:"):
+			said = strings.TrimPrefix(l, "err:")
+		}
+	}
+	if parseVersion(ver) != "" {
+		t.Fatalf("ver: %q took the runtime banner for the CLI's version", ver)
+	}
+	if strings.TrimSpace(code) != "1" {
+		t.Fatalf("code: %q, want 1", code)
+	}
+	if !strings.Contains(said, "Missing optional dependency") {
+		t.Fatalf("err: %q, want the CLI's own words", said)
 	}
 }

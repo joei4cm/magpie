@@ -128,3 +128,31 @@ func TestRunsBrokenOnlyWhenSure(t *testing.T) {
 		t.Errorf("a CLI that didn't start: %q", got)
 	}
 }
+
+// A node CLI whose npm update left out its optional native package dies
+// with a stack on stderr under Node's own banner (#7371): the banner's
+// version is Node's, not the CLI's, so the update is mended rather than
+// reported as succeeded. A version on stdout keeps the CLI healthy, its
+// own answer however it exits.
+func TestRunsBrokenWhenOnlyStderrHasAVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts as the CLI")
+	}
+	dir := t.TempDir()
+	u := &updater{via: "npm", cmd: []string{"npm"}}
+	broken := file(t, filepath.Join(dir, "codex"),
+		"#!/bin/sh\necho 'Error: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex: npm install -g @openai/codex@latest' >&2\necho 'Node.js v24.15.0' >&2\nexit 1\n")
+	got := runsBroken(context.Background(), broken, u)
+	if got == "" {
+		t.Fatal("the broken install was read as healthy: Node's banner on stderr was taken for the CLI's version")
+	}
+	if !strings.Contains(got, "Missing optional dependency") {
+		t.Fatalf("broken %q, want the CLI's own words", got)
+	}
+	// the CLI's own answer on stdout, exit or not
+	healthy := file(t, filepath.Join(dir, "codex-ok"),
+		"#!/bin/sh\necho '0.171.0'\necho 'Node.js v24.15.0' >&2\nexit 1\n")
+	if got := runsBroken(context.Background(), healthy, u); got != "" {
+		t.Fatalf("a CLI that said its version on stdout: %q", got)
+	}
+}

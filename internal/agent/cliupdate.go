@@ -9,6 +9,7 @@ package agent
 // the version is shown and nothing offered.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1237,14 +1238,19 @@ func (a *Agent) UpdateCLI() (CLI, error) {
 // didn't start, took too long, or its interpreter wasn't found (127), none
 // of which says the update broke it. It runs as the update did, its npm's
 // folder first on PATH, so a node CLI finds the node it was installed for.
+// The version counts only on stdout, the CLI's own answer: a node CLI
+// whose npm update left out its optional native package dies with a stack
+// on stderr under Node's own banner ("Node.js v24.15.0", #7371), and
+// parseVersion took that for the CLI's version, so the update was said to
+// have succeeded while the CLI was broken and the mend never ran.
 func runsBroken(ctx context.Context, bin string, u *updater) string {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	out, code, err := runCheck(ctx, bin, updateEnv(u))
+	out, errOut, code, err := runCheck(ctx, bin, updateEnv(u))
 	if err == nil || ctx.Err() != nil || code <= 0 || code == 127 || parseVersion(out) != "" {
 		return ""
 	}
-	if msg := lastLines(out, 2); msg != "" {
+	if msg := lastLines(out+"\n"+errOut, 2); msg != "" {
 		return msg
 	}
 	return fmt.Sprintf("exit status %d", code)
@@ -1255,19 +1261,22 @@ func runsBroken(ctx context.Context, bin string, u *updater) string {
 var checkTimeout = 30 * time.Second
 
 // runCheck runs bin --version with nothing on its stdin, and says what it
-// printed and its exit code (-1 when it didn't run to one); a var so tests
-// can fake it.
-var runCheck = func(ctx context.Context, bin string, env []string) (string, int, error) {
+// printed to stdout, what it printed to stderr, and its exit code (-1
+// when it didn't run to one); a var so tests can fake it. The streams
+// come apart for runsBroken: only stdout is the CLI's own answer.
+var runCheck = func(ctx context.Context, bin string, env []string) (string, string, int, error) {
 	cmd := proc.ProbeContext(ctx, bin, "--version")
 	cmd.Stdin = nil
 	cmd.Env = env
-	out, err := cmd.CombinedOutput()
+	var o, e bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &o, &e
+	err := cmd.Run()
 	code := -1
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		code = ee.ExitCode()
 	}
-	return string(out), code, err
+	return o.String(), e.String(), code, err
 }
 
 // scriptsFlag is the flag u's update lets its package's install script
