@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -958,20 +957,6 @@ func Hint(kind, v string) (head string, n int) {
 	return string(r[:k]), n
 }
 
-// anyCases are the patterns that find a user's word in any case, by word.
-var anyCases sync.Map
-
-// anyCase finds w as written but in any case (Unicode's simple folding, so
-// a word whose case changes its length in bytes is still found whole).
-func anyCase(w string) *regexp.Regexp {
-	if re, ok := anyCases.Load(w); ok {
-		return re.(*regexp.Regexp)
-	}
-	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(w))
-	anyCases.Store(w, re)
-	return re
-}
-
 // wordRune says r is a letter, a digit or _ of a script that puts spaces
 // between words. Chinese and Japanese don't, so a word of theirs is found
 // inside their text, and a Latin word right beside a Chinese letter
@@ -1080,44 +1065,8 @@ func mask(raw string, o Options, put func(kind, v string) string, escaped bool) 
 		put = unescapedPut(put)
 	}
 	var found []span
-	for _, w := range o.Words {
-		if w = strings.TrimSpace(w); len(w) < 2 {
-			continue
-		}
-		// a date is matched as that date, however it is written (dateword.go)
-		if spans, ok := dateSpans(s, w); ok {
-			found = append(found, spans...)
-			continue
-		}
-		// next finds w at or after i; one inside a longer word, where the
-		// user asked for whole words, is passed over a letter at a time, so
-		// "XABC ABC" still finds the second
-		next := func(i int) (int, int) {
-			if o.WordsAnyCase {
-				if m := anyCase(w).FindStringIndex(s[i:]); m != nil {
-					return i + m[0], i + m[1]
-				}
-				return -1, -1
-			}
-			if j := strings.Index(s[i:], w); j >= 0 {
-				return i + j, i + j + len(w)
-			}
-			return -1, -1
-		}
-		for i := 0; i <= len(s); {
-			a, b := next(i)
-			if a < 0 {
-				break
-			}
-			if o.WordsWhole && !wholeWord(s, a, b) {
-				_, n := utf8.DecodeRuneInString(s[a:])
-				i = a + max(n, 1)
-				continue
-			}
-			found = append(found, span{a, b, "TERM", ByWord, 0, false})
-			i = max(b, a+1)
-		}
-	}
+	// the words whole, whatever the list's size: one walk over s (words.go)
+	found = append(found, wordSpans(s, o)...)
 	found = append(found, ruleSpans(s, o)...)
 	// after the rules', so where a rule finds the same value it keeps the
 	// kind it has always had
