@@ -112,6 +112,56 @@ func TestMemberTooSmallIsTheLastResort(t *testing.T) {
 	}
 }
 
+// A member left out as too small is the last resort on an outage too
+// (#7367): every member with room failed before any output (a 503), and
+// the smaller one, asked after all, answers the overflow that tells the
+// agent to compact — after which it holds the request — rather than the
+// agent ending the turn on the 503, the narrower member never asked.
+// The outage stays the trace's first try, the cause. A rate limit, a
+// key refused and the request's own faults go to the agent as before.
+func TestMemberTooSmallIsTheLastResortOnOutage(t *testing.T) {
+	fresh(t)
+	over := `{"error":{"message":"This model's maximum context length is 8000 tokens","code":"context_length_exceeded"}}`
+	wide := &scripted{replies: []reply{{503, "", `{"error":{"type":"server_error","message":"fixture large service unavailable"}}`}}}
+	narrow := &scripted{replies: []reply{{400, "", over}}}
+	roomyMember(t, "wide", 40000, wide)
+	roomyMember(t, "narrow", 8000, narrow)
+	if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"wide/m", "narrow/m"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	past := strings.Repeat("word ", 7000) // about 8800 tokens as estimated: wide holds it, narrow doesn't
+	code, body := postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"`+past+`"}]}`)
+	r := lastRoute(s)
+	if code != 400 || !strings.Contains(body, "context_length_exceeded") || wide.n == 0 || narrow.n != 1 {
+		// wide's own call count is the 503's retries, which the test
+		// doesn't hold; what it holds is that the narrower member was
+		// asked at all and its overflow reached the agent
+		t.Fatalf("wide down on a 503: %d %s (wide %d, narrow %d)", code, body, wide.n, narrow.n)
+	}
+	// the 503's retries each record a try; what the trace must show is
+	// the wide member failing first and the narrower one asked last
+	if len(r.Tries) < 2 || r.Tries[0].ID != "wide" || r.Tries[0].Status != 503 || r.Tries[len(r.Tries)-1].ID != "narrow" {
+		t.Fatalf("tries: first %+v, last %+v, %d total", r.Tries[0], r.Tries[len(r.Tries)-1], len(r.Tries))
+	}
+
+	// compacted, the request fits the narrower member and is answered
+	narrow.replies = []reply{{200, "", chatOK}}
+	code, body = postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 || !strings.Contains(body, "hello") {
+		t.Fatalf("compacted: %d %s", code, body)
+	}
+
+	// the request's own fault still goes to the agent as before: the
+	// smaller member is not asked
+	wide.replies = []reply{{400, "", `{"error":{"message":"Invalid request parameters"}}`}}
+	wide.n, narrow.n = 0, 0
+	code, body = postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"`+past+`"}]}`)
+	if code != 400 || !strings.Contains(body, "Invalid request parameters") || narrow.n != 0 {
+		t.Fatalf("the request's fault: %d %s (wide %d, narrow %d)", code, body, wide.n, narrow.n)
+	}
+}
+
 // A conversation that began on the free member, and is kept there by
 // affinity, moves once it has grown past that member's window.
 func TestConversationOutgrowingItsMemberMoves(t *testing.T) {

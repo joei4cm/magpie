@@ -5750,13 +5750,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// failed: a reply held whole that passed is the whole reply, and
 		// failure over a 24MB one held its client past its timeout
 		if last && len(small) > 0 && pin == "" && other == nil && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused && !outgrew &&
-			(try.Fail == failQuota || try.Fail == failCredit || slices.Contains([]string{failQuota, failCredit}, failure(hw.code(), hw.errBody()))) {
-			// every one with room is out of its allowance: those roomy
-			// left out as too small for the request are asked after all,
-			// those not resting, for the agent to be told to compact
-			// rather than to wait for an allowance hours away (Kai on
-			// Discord: Claude's two accounts spent, its Fallback a Codex
-			// model of 272K). This one rests, as one before the last does
+			(try.Fail == failQuota || try.Fail == failCredit ||
+				slices.Contains([]string{failQuota, failCredit}, failure(hw.code(), hw.errBody())) ||
+				failure(hw.code(), hw.errBody()) == failOther && hw.code() >= 500) {
+			// every one with room is out of its allowance, or its upstream
+			// failed the request before any of it went (a 503, #7367):
+			// those roomy left out as too small for the request are asked
+			// after all, those not resting, for the agent to be told to
+			// compact rather than to wait for an allowance hours away (Kai
+			// on Discord: Claude's two accounts spent, its Fallback a
+			// Codex model of 272K), or to end the turn on the upstream's
+			// error with the narrower member never asked (sunburst89757:
+			// an ordered group's wide member answered 503, the request
+			// fit no other member, and the 8k fallback never received it).
+			// The first failure stays the trace's first try, the cause.
+			// This one rests, as one before the last does
 			var next []candidate
 			var nextW []Weighed
 			for k, x := range small {
