@@ -164,14 +164,36 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // and the hook's name stays beside its glyph, not pushed under it;
         // 1100 in a window of its own, as resizing this one crosses the
         // page's breakpoint mid-test
+        // the Library draws its rows again on its own, and a row drawn
+        // before that is detached by it: a detached element has no
+        // computed style, so its line-height reads "" and its lines NaN
+        // (#7512). The row is taken and measured in one go, and again
+        // while it holds.
+        const measure = async (pg) => {
+          for (let i = 0; i < 200; i++) {
+            const fit = await pg.evaluate(() => {
+              const row = [...document.querySelectorAll("#view-library .lib-hook")].find((r) => r.querySelector(".name")?.textContent.trim() === "fmt");
+              if (!row || !row.isConnected) return null;
+              const e = row.querySelector(".lib-hookdesc");
+              if (!e || !e.isConnected) return null;
+              const lh = parseFloat(getComputedStyle(e).lineHeight);
+              if (!Number.isFinite(lh) || lh <= 0) return null; // its stylesheet hasn't applied
+              return {
+                clipped: e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1,
+                lines: Math.round(e.getBoundingClientRect().height / lh),
+                gap: Math.abs(row.firstElementChild.getBoundingClientRect().top - row.querySelector(".name").getBoundingClientRect().top),
+              };
+            });
+            if (fit) return fit;
+            await pg.waitForTimeout(50);
+          }
+          throw new Error("the fmt hook row was never measured");
+        };
         const wrapped = async (pg, width) => {
-          const r = pg.locator("#view-library .lib-hook").filter({ has: pg.locator(".name", { hasText: /^fmt$/ }) });
-          await r.waitFor();
-          const fit = await r.locator(".lib-hookdesc").evaluate((e) => ({ clipped: e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1, lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)) }));
+          const fit = await measure(pg);
           assert.equal(fit.clipped, false, `the description is cut off at ${width}`);
           assert(fit.lines >= 2, `the description isn't wrapped at ${width}: ${fit.lines} line`);
-          const gap = await r.evaluate((x) => Math.abs(x.firstElementChild.getBoundingClientRect().top - x.querySelector(".name").getBoundingClientRect().top));
-          assert(gap < 12, `the name is ${Math.round(gap)}px off its glyph at ${width}`);
+          assert(fit.gap < 12, `the name is ${Math.round(fit.gap)}px off its glyph at ${width}`);
         };
         await wrapped(page, 440);
         {
