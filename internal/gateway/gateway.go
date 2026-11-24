@@ -8097,6 +8097,13 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if proto == provider.Responses || proto == provider.Chat || proto == provider.Anthropic {
 		ints = &intTidy{proto: proto, sse: sse}
 	}
+	// a model's closing bracket of the wrong kind in a call's arguments,
+	// which the client's json.loads turns away (tool_args_bracket.go,
+	// #7678); any other model's reply goes as it came
+	var brackets *bracketTidy
+	if proto == provider.Responses || proto == provider.Chat || proto == provider.Anthropic {
+		brackets = &bracketTidy{proto: proto, sse: sse}
+	}
 	// a glm-5.3-flash* replica's CR stitched into a call's argument
 	// fragments goes (tool_args_cr.go, #4256); any other model's reply
 	// goes as it came
@@ -8305,6 +8312,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			if made != nil {
 				out = made.write(out)
 			}
+			if brackets != nil {
+				out = brackets.write(out)
+			}
 			if ints != nil {
 				out = ints.write(out)
 			}
@@ -8349,6 +8359,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		}
 		if made != nil {
 			b = made.write(b)
+		}
+		if brackets != nil {
+			b = brackets.write(b)
 		}
 		if ints != nil {
 			b = ints.write(b)
@@ -8396,6 +8409,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// does: a reply crArgs held to its end goes through it too
 			b = made.write(b)
 		}
+		if brackets != nil {
+			b = brackets.write(b)
+		}
 		if ints != nil {
 			// ints holds a whole reply until its own drain below, so the
 			// tail ints has not seen goes through it here first
@@ -8413,6 +8429,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		if made != nil {
 			b = made.write(b)
 		}
+		if brackets != nil {
+			b = brackets.write(b)
+		}
 		if ints != nil {
 			b = ints.write(b)
 		}
@@ -8425,6 +8444,21 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// past crArgs, drained above: what made held goes on through the
 		// filters after it only
 		b := made.flush()
+		if brackets != nil {
+			b = brackets.write(b)
+		}
+		if ints != nil {
+			b = ints.write(b)
+		}
+		if sigs != nil {
+			b = sigs.write(b)
+		}
+		write(out(b))
+	}
+	if brackets != nil {
+		// past made, drained above: what brackets held goes on through the
+		// filters after it
+		b := brackets.flush()
 		if ints != nil {
 			b = ints.write(b)
 		}
@@ -10685,6 +10719,9 @@ func encoder(proto provider.Protocol, w *sseWriter, r *Request, usage ...*Usage)
 	// integers (grok_integral.go, #1431, #3152), outside usageEncoder,
 	// which reads its encoder's reply id
 	enc = &wholeEncoder{streamEncoder: enc}
+	// a model's closing brackets of the wrong kind in a call's arguments
+	// reach the client whole (tool_args_bracket.go, #7678)
+	enc = &bracketEncoder{streamEncoder: enc}
 	if len(r.Free) > 0 {
 		// a Gemini model's objects of any fields, which it was asked for
 		// as JSON text, read back (gemini_free_objects.go, #7363); past
@@ -10720,6 +10757,9 @@ func render(proto provider.Protocol, res Result, r *Request) []byte {
 	// a model's whole floats in a call's arguments reach the client as
 	// integers (grok_integral.go, #1431, #3152)
 	res = wholeResult(res)
+	// a model's closing brackets of the wrong kind in a call's arguments
+	// reach the client whole (tool_args_bracket.go, #7678)
+	res = bracketResult(res)
 	if r.CR {
 		res = crResult(res)
 	}
