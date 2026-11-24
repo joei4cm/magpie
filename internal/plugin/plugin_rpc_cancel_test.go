@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +18,7 @@ import (
 // reads left task after task alive past their callers (#4678).
 func TestOrdinaryCallCancelTellsTheHost(t *testing.T) {
 	f := newFakeHost(t)
-	// the call count is read beside a caller goroutine still admitting, so
-	// it is read under the host's lock
+	// read under the host's lock while ctrlLoop may still be retiring the call
 	liveCalls := func() int {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -29,18 +29,18 @@ func TestOrdinaryCallCancelTellsTheHost(t *testing.T) {
 	go func() {
 		waited <- f.host.call(ctx, "usage", map[string]any{"provider": "fakeco"}, nil)
 	}()
-	waitFor(t, "the usage call reached the host", func() bool { return liveCalls() == 1 })
+	// Wait until the usage request actually reached the fake host, not merely
+	// admit() in callSending: cancelling before enqueueLine accepts the call
+	// releases it unsent with no abort (#7628).
+	waitFor(t, "the usage call reached the host", func() bool {
+		return slices.Contains(f.methods(), "usage")
+	})
 	cancel()
 	if err := <-waited; !errors.Is(err, context.Canceled) {
 		t.Fatalf("usage = %v, want canceled", err)
 	}
 	waitFor(t, "the host was told of the cancellation", func() bool {
-		for _, m := range f.methods() {
-			if m == "abort" {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(f.methods(), "abort")
 	})
 	waitFor(t, "the aborted call left the host", func() bool { return liveCalls() == 0 })
 	waitFor(t, "the call's slot came free", func() bool { return f.slotsFree() == cap(f.host.slots) })
