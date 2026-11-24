@@ -190,3 +190,59 @@ func TestMoveCodexThreadsLeavesAnOpenThread(t *testing.T) {
 		t.Errorf("thread-writer-locks made where Codex keeps none: %v", err)
 	}
 }
+
+// RelabelCodexThreads is the same move's in-place form, and a thread a
+// Codex holds open is Codex's to write there too (#7643): the codex
+// catalog's startup Sync skipped a recent file (ActiveWindow) but relabeled
+// a quiet one still open in the app, writing its provider over what Codex
+// had under its own writer lock. The locked thread is left on the provider,
+// file and row, for the next Sync once the Codex lets go; every other one
+// moves as before.
+func TestRelabelCodexThreadsLeavesAnOpenThread(t *testing.T) {
+	_, home := manageSetup(t)
+	const (
+		free = "019a0000-0000-7000-8000-0000000000b1"
+		open = "019a0000-0000-7000-8000-0000000000b2"
+	)
+	day := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	freePath := cxRollout(t, home, "sessions", free, "magpie", day)
+	openPath := cxRollout(t, home, "sessions", open, "magpie", day)
+	db := cxThreadRows(t, home, map[string]string{free: "magpie", open: "magpie"})
+	for id, path := range map[string]string{free: freePath, open: openPath} {
+		d, err := sql.Open("sqlite", db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Exec(`UPDATE threads SET rollout_path = ? WHERE id = ?`, path, id); err != nil {
+			t.Fatal(err)
+		}
+		d.Close()
+	}
+	orig, _ := os.ReadFile(openPath)
+	_, letGo := holdThread(t, home, open)
+
+	moved, err := RelabelCodexThreads(home, "magpie", "openai")
+	if err != nil || len(moved) != 1 || moved[0] != free {
+		t.Fatalf("moved %+v, %v; want %s alone", moved, err, free)
+	}
+	if b, _ := os.ReadFile(openPath); !bytes.Equal(b, orig) {
+		t.Fatal("relabeled while a Codex had it open")
+	}
+	if got, _, _ := threadProvider(t, db, open); got != "magpie" {
+		t.Errorf("its row moved to %q, its file didn't", got)
+	}
+	if got := codexMetaProvider(freePath); got != "openai" {
+		t.Errorf("the free thread's file on %q", got)
+	}
+
+	letGo()
+	if moved, err = RelabelCodexThreads(home, "magpie", "openai"); err != nil || len(moved) != 1 || moved[0] != open {
+		t.Fatalf("after its Codex let go: %+v %v", moved, err)
+	}
+	if got := codexMetaProvider(openPath); got != "openai" {
+		t.Errorf("file on %q", got)
+	}
+	if got, _, _ := threadProvider(t, db, open); got != "openai" {
+		t.Errorf("row on %q", got)
+	}
+}

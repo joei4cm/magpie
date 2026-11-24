@@ -1071,8 +1071,9 @@ func moveCodexThread(path, id, to string) (bool, error) {
 // would copy and rewrite every one of them; moving it back is the undo,
 // and no copy is kept. Rollouts Codex has packed (.zst, a week after
 // their last turn) are left on from, and so is a thread written to in the
-// last minute, one whose file names another provider, and one outside the
-// folder's sessions. It says the ids it moved and the first error it met,
+// last minute, one a Codex has open (its writer lock held), one whose
+// file names another provider, and one outside the folder's sessions.
+// It says the ids it moved and the first error it met,
 // having gone on past it.
 func RelabelCodexThreads(home, from, to string) ([]string, error) {
 	if !codexProviderRe.MatchString(from) || !codexProviderRe.MatchString(to) || from == to || len(from) != len(to) {
@@ -1117,6 +1118,10 @@ func RelabelCodexThreads(home, from, to string) ([]string, error) {
 		}
 	}
 	now := time.Now()
+	// a thread a Codex holds open (its writer lock, as CodexThreadsBusyOn
+	// finds them) is left: its first line is Codex's to write (#7643), and
+	// the next Sync brings it over once the thread is let go
+	locked := codexLockedIDs(home)
 	for _, r := range rows {
 		path := filepath.Clean(r.path)
 		if !filepath.IsAbs(path) || packed(path) || !strings.Contains(filepath.Base(path), r.id) || !sameDir(codexHomeOf(path), home) {
@@ -1128,6 +1133,9 @@ func RelabelCodexThreads(home, from, to string) ([]string, error) {
 		}
 		// a packed twin beside it: Codex is packing it now
 		if _, err := os.Lstat(path + zstSuffix); err == nil {
+			continue
+		}
+		if locked[strings.ToLower(r.id)] {
 			continue
 		}
 		ok, err := relabelHead(path, from, to, fi.ModTime())
