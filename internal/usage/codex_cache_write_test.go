@@ -101,3 +101,45 @@ func TestCodexCacheWriteNotInInput(t *testing.T) {
 		t.Fatalf("rows %+v", p.Rows)
 	}
 }
+
+// #7746: a Codex call driven by a client whose own agent is not codex —
+// T3 Code running codex app-server — is recorded on the gateway side
+// under that agent, while the session file of the same call is always
+// Codex's. The response id names only a Codex answer, so the two sides
+// pair by it whatever the gateway's client called itself; holding the
+// gateway row to Agent == "codex" left the call as two rows.
+func TestCodexClientOtherThanCodexMatchesByResponseID(t *testing.T) {
+	pageHome(t)
+	end := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)).Add(-time.Minute)
+	path := filepath.Join(sessions.CodexDir(), "sessions", "rollout-2026-09-30T00-00-00-t3.jsonl")
+	os.MkdirAll(filepath.Dir(path), 0700)
+	u := `{"input_tokens":120000,"cached_input_tokens":113000,"output_tokens":300}`
+	// the same response id as the gateway's record names
+	var b strings.Builder
+	b.WriteString(`{"type":"session_meta","payload":{"id":"t3","model_provider":"openai"}}` + "\n")
+	b.WriteString(`{"type":"turn_context","payload":{"model":"gpt-6.2-sol","effort":"high"}}` + "\n")
+	// a token_usage_record carries the call's response id; the gateway's
+	// record of the same call names it too
+	fmt.Fprintf(&b, `{"timestamp":%q,"type":"token_usage_record","payload":{"response_id":"resp-t3","session_id":"t3","thread_id":"t3","turn_id":"turn","usage":%s}}`+"\n",
+		end.Format(time.RFC3339Nano), u)
+	os.WriteFile(path, []byte(b.String()), 0600)
+
+	// the gateway's record of the same call, under the client's own agent:
+	// no Session, so only the response id can pair it with the session file
+	rec := Record{Time: end.Add(-5 * time.Second), Millis: 5000, Agent: "t3code", Provider: "maru-code", Host: "api.muteki.site",
+		Model: "gpt-6.2-sol", Requested: "group/group", Served: "gpt-6.2-sol", Effort: "high", Status: 200,
+		Input: 7000, Output: 300, CacheRead: 113000, ResponseID: "resp-t3", Endpoint: "/v1/responses"}
+	j, _ := json.Marshal(rec)
+	os.MkdirAll(filepath.Dir(Path()), 0700)
+	os.WriteFile(Path(), []byte(string(j)+"\n"), 0600)
+
+	p := QueryPage(Today, Filter{}, 0, 100)
+	if p.Sum.Calls != 1 {
+		t.Fatalf("the call is listed %d times, want once: %+v", p.Sum.Calls, p.Rows)
+	}
+	for _, r := range p.Rows {
+		if r.Source == "log" {
+			t.Fatalf("the gateway's call is listed again from Codex's session file: %+v", r)
+		}
+	}
+}

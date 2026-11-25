@@ -62,7 +62,13 @@ func codexResponseMatches(records []Record, calls []sessions.Call, duplicateCall
 			continue
 		}
 		record, call := recordRefs[0], callRefs[0]
-		if records[record].Agent == "codex" && !records[record].IsRejected() && records[record].Source != SourceReported && calls[call].Agent == "codex" {
+		// the response id says the call is Codex's whatever client drove
+		// it: a client whose own name is not codex (T3 Code driving codex
+		// app-server) is recorded by its own agent on the gateway side,
+		// while the session file the same call wrote is always Codex's —
+		// holding the gateway row to Agent == "codex" left every such call
+		// as two rows (#7746). The id already names only a Codex answer.
+		if !records[record].IsRejected() && records[record].Source != SourceReported && calls[call].Agent == "codex" {
 			pairs[record] = call
 		}
 	}
@@ -316,15 +322,16 @@ func codexChunkResponsePairs(gateways, locals []*rowChunk, duplicateLocal refSet
 }
 
 // codexGatewayCall is whether p, a row of c, is a Codex call the gateway
-// served and logged itself: isCodexRow, not IsRejected and not
-// SourceReported of c.row(p's index), read from p's strings alone.
+// served and logged itself. The response id (rowResponseID) says it is
+// Codex's whatever client drove it — a client whose own name is not
+// codex (T3 Code driving codex app-server) is recorded under its own
+// agent while the session file of the same call is Codex's, and holding
+// the row to a codex agent or client left it as two rows (#7746). It is
+// also not IsRejected and not SourceReported of c.row(p's index), read
+// from p's strings alone.
 func (c *rowChunk) codexGatewayCall(p *packedRow) bool {
 	str := func(slot int) string { return c.Strings[c.text(p, slot)] }
-	if client := str(rowClient); client != "" {
-		if client != "codex" {
-			return false
-		}
-	} else if str(0) != "codex" {
+	if str(rowResponseID) == "" {
 		return false
 	}
 	if p.Flags&4 != 0 || str(1) == "" && p.Status >= 400 {
