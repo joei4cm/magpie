@@ -224,10 +224,11 @@ func restoreShapes(s string, put map[string]int) string {
 		if !strings.Contains(lower, f) {
 			continue
 		}
+		// a stand-in is put back only as a whole name (wholeAddr): an
+		// address's and a user name's alike, since eight lowercase letters
+		// inside another made-up key (a SECRET's shape, which has lowercase
+		// letters too) are no one's name (#7723)
 		whole := wholeAddr
-		if kind != "IP" {
-			whole = nil
-		}
 		if out := replaceStandIn(s, lower, f, values[f], put, whole); out != s {
 			s, stale = out, true
 		}
@@ -297,7 +298,14 @@ func shapeTail(s string) int {
 	for f, kind := range shapes {
 		i := strings.LastIndex(s, f)
 		if foldStandIn(kind) {
-			i = strings.LastIndex(lower, f)
+			// a stand-in whole only as a name: one that came whole is
+			// put back and its end held from, but eight letters inside
+			// another made-up key are no stand-in that came, and
+			// counting them held the key's own start from being held
+			// (#7723)
+			for i >= 0 && !wholeAddr(s, i, i+len(f)) {
+				i = strings.LastIndex(lower[:i], f)
+			}
 		}
 		if i >= 0 {
 			whole = max(whole, i+len(f))
@@ -360,8 +368,14 @@ func outsideShapes(s string, found []span) []span {
 			}
 			a += i
 			z := a + len(f)
-			found = slices.DeleteFunc(found, func(x span) bool { return x.start < z && x.end > a })
 			i = z
+			// a stand-in's letters inside another made-up key are no
+			// stand-in that came (#7723), and what they lie in is the
+			// bigger key's own to mask or put back
+			if foldStandIn(kind) && !wholeAddr(s, a, z) {
+				continue
+			}
+			found = slices.DeleteFunc(found, func(x span) bool { return x.start < z && x.end > a })
 		}
 	}
 	return found
