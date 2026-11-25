@@ -179,6 +179,70 @@ func obsidian(home, cfg string) *Agent {
 	}, paths...)
 }
 
+// obsProbeWait is how long the Obsidian scan waits for one vault before
+// calling it not there. A look at a File Provider volume whose provider
+// stopped answering — a vault under ~/Library/CloudStorage whose OneDrive
+// sync stalled (#7750) — never returns from stat, and the start-up scan
+// held the app for ever on it: no window, no log line, no crash. A var for
+// tests, as wslRootWait is.
+var obsProbeWait = 5 * time.Second
+
+// obsDirAt, obsFileAt and obsReadAt are the looks the Obsidian scan makes
+// of a vault: whether a folder is there, whether a file is, and what a
+// file holds. Vars for tests, as wslRoot's stat is.
+var (
+	obsDirAt  = isDir
+	obsFileAt = isFile
+	obsReadAt = edit.Read
+)
+
+// obsWithin is fn's answer when it comes within obsProbeWait, and whether
+// it did. A call left blocked in the kernel is left behind to finish on
+// its own: there is one per path that never answers, and the app goes on
+// without that vault.
+func obsWithin[T any](fn func() T) (T, bool) {
+	out := make(chan T, 1)
+	go func() { out <- fn() }()
+	t := time.NewTimer(obsProbeWait)
+	defer t.Stop()
+	select {
+	case v := <-out:
+		return v, true
+	case <-t.C:
+		var zero T
+		return zero, false
+	}
+}
+
+// obsVaultDir is whether the vault folder at p is there, false for one
+// that doesn't answer within the wait.
+func obsVaultDir(p string) bool {
+	// the look is taken here, not in the goroutine: the var a test holds
+	// back is read once, by the caller, and the goroutine that is left
+	// behind keeps the look it was given
+	at := obsDirAt
+	d, _ := obsWithin(func() bool { return at(p) })
+	return d
+}
+
+// obsFile is what a read of a vault's file gave: its bytes and its error.
+type obsFile struct {
+	b   []byte
+	err error
+}
+
+// obsVaultRead is what the file at p holds, and whether it was read: a
+// file that doesn't answer within the wait is left for the next look, as
+// one that isn't there.
+func obsVaultRead(p string) ([]byte, error) {
+	read := obsReadAt
+	v, ok := obsWithin(func() obsFile { b, err := read(p); return obsFile{b, err} })
+	if !ok {
+		return nil, os.ErrDeadlineExceeded
+	}
+	return v.b, v.err
+}
+
 // obsidianDirs are the folders Obsidian may keep obsidian.json in here,
 // the one it uses on this system first.
 func obsidianDirs(home, cfg string) []string {
@@ -229,7 +293,7 @@ func obsidianVaults(dirs []string) []string {
 		sort.Strings(ids)
 		for _, id := range ids {
 			p := doc.Vaults[id].Path
-			if p == "" || !isDir(p) || slices.Contains(out, filepath.Clean(p)) {
+			if p == "" || !obsVaultDir(p) || slices.Contains(out, filepath.Clean(p)) {
 				continue
 			}
 			out = append(out, filepath.Clean(p))
@@ -246,14 +310,18 @@ func obsCopilotDir(vault string) string {
 // obsCopilotData is Copilot's settings file in vault.
 func obsCopilotData(vault string) string { return filepath.Join(obsCopilotDir(vault), "data.json") }
 
-// obsCopilotHere says vault has Copilot installed.
+// obsCopilotHere says vault has Copilot installed, false for a vault that
+// doesn't answer within the wait.
 func obsCopilotHere(vault string) bool {
-	return isFile(filepath.Join(obsCopilotDir(vault), "manifest.json"))
+	at := obsFileAt
+	here, _ := obsWithin(func() bool { return at(filepath.Join(obsCopilotDir(vault), "manifest.json")) })
+	return here
 }
 
-// obsCopilotWired says the settings file at path has magpie's provider.
+// obsCopilotWired says the settings file at path has magpie's provider,
+// false for one that doesn't answer within the wait.
 func obsCopilotWired(path string) bool {
-	b, err := edit.Read(path)
+	b, err := obsVaultRead(path)
 	return err == nil && obsCopilotOurs(gjson.GetBytes(b, "providers."+obsCopilotMagpie))
 }
 
@@ -274,8 +342,13 @@ func obsCopilotRead(path string) (map[string]json.RawMessage, []byte, error) {
 	if v := obsCopilotMajor(filepath.Join(dir, "manifest.json")); v > 0 && v < 4 {
 		return nil, nil, fmt.Errorf("%s is Copilot %d: magpie sets Copilot for Obsidian 4 and later — update it in Obsidian's Settings › Community plugins", dir, v)
 	}
-	b, err := edit.Read(path)
+	b, err := obsVaultRead(path)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			// a File Provider volume whose provider stopped answering
+			// (#7750): named, so the user knows which vault to look at
+			return nil, nil, fmt.Errorf("%s never answered, so magpie left it alone", path)
+		}
 		return nil, nil, err
 	}
 	doc := map[string]json.RawMessage{}
@@ -291,7 +364,7 @@ func obsCopilotRead(path string) (map[string]json.RawMessage, []byte, error) {
 // obsCopilotMajor is the major version manifest.json at path says, 0 when it
 // says none.
 func obsCopilotMajor(path string) int {
-	b, err := edit.Read(path)
+	b, err := obsVaultRead(path)
 	if err != nil {
 		return 0
 	}
