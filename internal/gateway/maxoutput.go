@@ -357,7 +357,7 @@ func thinksByDefault(p provider.Provider, model string) bool {
 	if strings.HasSuffix(p.VendorHost(), "tencentmaas.com") && strings.Contains(strings.ToLower(model), "deepseek") {
 		return true
 	}
-	return googleGemini(p, model) && geminiThinksByDefault(model)
+	return (googleGemini(p, model) || openRouterGemini(p, model)) && geminiThinksByDefault(model)
 }
 
 // googleGemini is whether p serves model as Google serves it: one of
@@ -411,12 +411,31 @@ func namesReasoning(proto provider.Protocol, body []byte) bool {
 	return true
 }
 
+// openRouterGemini is whether p serves a Gemini that thinks by default
+// (geminiThinksByDefault) at OpenRouter. There a raised reply limit is
+// the cost a "can only afford" refusal counts against the balance, so
+// withThinkingRoom asks the model for less reasoning instead of more
+// room (openRouter.ai/docs: reasoning_effort is reasoning.effort, which
+// a Gemini 3 reads as its thinking level and a 2.5 as a budget).
+func openRouterGemini(p provider.Provider, model string) bool {
+	if !geminiThinksByDefault(model) {
+		return false
+	}
+	return p.VendorPreset() == "openrouter" ||
+		strings.EqualFold(provider.HostOf(p.Base(provider.Chat)), "openrouter.ai")
+}
+
 // withThinkingRoom is body, in proto's words, with the reply limit a client
 // named raised by the room a default-thinking model (thinksByDefault) needs
 // to think in before it answers (replyRoom at its default effort, high),
 // when the client asked for no reasoning of its own, the user set no Max
 // output for the model, and the limit is a small one (at most
 // thinkingRoomBelow). The model's own limit, where known, still caps it.
+//
+// OpenRouter's Gemini is asked for a low effort instead (withLowEffort):
+// it holds the whole max_tokens against the balance ("can only afford"),
+// so a raised limit turns a small balance away while the small one is
+// still spent thinking (the sibling left by 8bed54271, #7763).
 func withThinkingRoom(p provider.Provider, model string, proto provider.Protocol, body []byte) []byte {
 	if !thinksByDefault(p, model) || namesReasoning(proto, body) || userOutput(p, model) > 0 {
 		return body
@@ -441,11 +460,34 @@ func withThinkingRoom(p provider.Provider, model string, proto provider.Protocol
 	if n <= 0 || n > thinkingRoomBelow {
 		return body
 	}
+	if openRouterGemini(p, model) {
+		return withLowEffort(proto, body)
+	}
 	n = replyRoom(n, "high")
 	if own := askedOutput(p, model); own > 0 && n > own {
 		n = own
 	}
 	return withFields(body, map[string]any{field: n})
+}
+
+// withLowEffort is body, in proto's words, asking for reasoning at low:
+// Chat's reasoning_effort, Responses' reasoning object, an Anthropic
+// client's thinking at its least budget (1024, which the read of it back
+// calls low). Called only of a request that named no reasoning of its
+// own (withThinkingRoom's namesReasoning check).
+func withLowEffort(proto provider.Protocol, body []byte) []byte {
+	switch proto {
+	case provider.Chat:
+		return withFields(body, map[string]any{"reasoning_effort": "low"})
+	case provider.Responses:
+		return withFields(body, map[string]any{"reasoning": map[string]any{"effort": "low"}})
+	case provider.Anthropic:
+		// an effort on an Anthropic client only counts with thinking
+		// asked; its smallest budget is low's room upstream
+		return withFields(body, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 1024}})
+	default:
+		return body
+	}
 }
 
 // thinkingRoomBelow is the largest reply limit a request names that is

@@ -156,6 +156,80 @@ func TestGeminiCapGetsThinkingRoom(t *testing.T) {
 	}
 }
 
+// OpenRouter holds the whole reply limit against the balance ("can only
+// afford"), so raising it the way Google's own routes get would turn a
+// small balance away while the small limit is still spent thinking
+// (#7763, the sibling 8bed54271 left). A small-limit request to a Gemini
+// that thinks by default at OpenRouter, naming no reasoning, is asked for
+// a low effort instead of more room; reasoning asked, the user's Max
+// output, a large limit, a Flash-Lite, a Gemini client's own
+// maxOutputTokens and a relay all go as they came.
+func TestOpenRouterGeminiAskedLowEffort(t *testing.T) {
+	fresh(t)
+	u := &geminiRoomUpstream{}
+	up := httptest.NewServer(u)
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "or", Name: "OpenRouter", Preset: "openrouter", Key: "k",
+		Models: []string{"google/gemini-4-hydrogen", "google/gemini-3.5-flash-lite", "google/gemini-2.5-pro", "google/gemini-4-argon", "deepseek/deepseek-v4.1"},
+		Chat:   "http://openrouter.ai/api/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Key: "k",
+		Models: []string{"google/gemini-4-hydrogen"}, Chat: "http://relay.example.com/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetModelOutput("or/google/gemini-4-argon", 8192); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	addr := strings.TrimPrefix(up.URL, "http://")
+	s.client = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}}}
+	const msgs = `"messages":[{"role":"user","content":"hi"}]`
+	for _, c := range []struct {
+		name       string
+		ask        [2]string
+		wantLimit  int    // -1: no limit named
+		wantEffort string // "": no reasoning ask expected upstream
+	}{
+		{"chat, small limit", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-hydrogen","max_tokens":8192,` + msgs + `}`}, 8192, "low"},
+		{"chat, max_completion_tokens", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-hydrogen","max_completion_tokens":4096,` + msgs + `}`}, 4096, "low"},
+		{"chat, 2.5 pro", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-2.5-pro","max_tokens":8192,` + msgs + `}`}, 8192, "low"},
+		{"chat, large limit", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-hydrogen","max_tokens":32000,` + msgs + `}`}, 32000, ""},
+		{"chat, no limit", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-hydrogen",` + msgs + `}`}, -1, ""},
+		{"chat, effort asked", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-hydrogen","max_tokens":8192,"reasoning_effort":"high",` + msgs + `}`}, 8192, "high"},
+		{"chat, reasoning asked", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-hydrogen","max_tokens":8192,"reasoning":{"effort":"minimal"},` + msgs + `}`}, 8192, "minimal"},
+		{"chat, flash-lite", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-3.5-flash-lite","max_tokens":8192,` + msgs + `}`}, 8192, ""},
+		{"chat, not a gemini", [2]string{"/v1/chat/completions", `{"model":"or/deepseek/deepseek-v4.1","max_tokens":8192,` + msgs + `}`}, 8192, ""},
+		{"chat, user's max output", [2]string{"/v1/chat/completions", `{"model":"or/google/gemini-4-argon","max_tokens":8192,` + msgs + `}`}, 8192, ""},
+		{"chat, a relay's gemini", [2]string{"/v1/chat/completions", `{"model":"relay/google/gemini-4-hydrogen","max_tokens":8192,` + msgs + `}`}, 8192, ""},
+		{"responses, small limit", [2]string{"/v1/responses", `{"model":"or/google/gemini-4-hydrogen","max_output_tokens":8192,"input":"hi"}`}, 8192, "low"},
+		{"messages, small limit", [2]string{"/v1/messages", `{"model":"or/google/gemini-4-hydrogen","max_tokens":8192,` + msgs + `}`}, 8192, "low"},
+	} {
+		if code, raw := postJSON(t, s, c.ask[0], c.ask[1]); code != 200 {
+			t.Fatalf("%s: %d %s", c.name, code, raw)
+		}
+		got, path := u.take()
+		if len(got) != 1 {
+			t.Fatalf("%s: %d requests upstream", c.name, len(got))
+		}
+		q := got[0]
+		if n := replyLimitOf(q); n != c.wantLimit {
+			t.Errorf("%s: reply limit %d at %s, want %d", c.name, n, path[0], c.wantLimit)
+		}
+		effort := ""
+		if e, ok := q["reasoning_effort"].(string); ok {
+			effort = e
+		} else if r, ok := q["reasoning"].(map[string]any); ok {
+			effort, _ = r["effort"].(string)
+		}
+		if effort != c.wantEffort {
+			t.Errorf("%s: effort %q at %s, want %q (%v)", c.name, effort, path[0], c.wantEffort, q)
+		}
+	}
+}
+
 // The same on Vertex AI, where a Chat client's request goes to Gemini's
 // generateContent at the user's project.
 func TestVertexGeminiCapGetsThinkingRoom(t *testing.T) {
