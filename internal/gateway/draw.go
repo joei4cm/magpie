@@ -211,6 +211,19 @@ func resolveDrawing(id string) (provider.Provider, string, bool) {
 			return p, drawnAs(p, id), true
 		}
 	}
+	// a bare name that is a routing group's own (an image-only group is
+	// what /v1/models lists agents by its bare id, and Resolve leaves such
+	// a group to chat, #8087): drawn on by its first member that draws,
+	// as the group ref is
+	if ref, ok := provider.GroupFor(id); ok {
+		if _, ms, ok := drawingMembers(ref); ok {
+			for _, m := range ms {
+				if drawsModel(m.Provider, m.Model) {
+					return m.Provider, m.Model, true
+				}
+			}
+		}
+	}
 	return provider.Resolve(id)
 }
 

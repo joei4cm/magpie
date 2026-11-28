@@ -39,6 +39,12 @@ func mediaMembers(ref, kind string) (provider.Group, []provider.Member, bool) {
 	if g, ms, ok := provider.KindGroup(kind, ref, servesKind(kind)); ok && len(ms) > 1 {
 		return g, ms, true
 	}
+	// a bare name that is a routing group's own (a media-only group is
+	// what /v1/models lists agents by its bare id, and Resolve leaves such
+	// a group to chat, #8087): its members of the kind, as the ref does
+	if named, ok := provider.GroupFor(ref); ok {
+		return mediaMembers(named, kind)
+	}
 	return provider.Group{}, nil, false
 }
 
