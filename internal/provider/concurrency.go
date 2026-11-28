@@ -295,6 +295,26 @@ func (p Provider) QuotaRestFor() time.Duration {
 	return time.Duration(min(max(p.QuotaRest, 0), MaxQuotaRest)) * time.Minute
 }
 
+// CreditRestFor is the minimum rest of one of p's keys out of credit when
+// the vendor doesn't say when it is back; 0 leaves the gateway's ladder alone.
+func (p Provider) CreditRestFor() time.Duration {
+	return time.Duration(min(max(p.CreditRest, 0), MaxQuotaRest)) * time.Minute
+}
+
+// SetCreditRest sets the minimum credit rest, in minutes, for a provider's keys.
+// 0 leaves the gateway's credit ladder alone.
+func SetCreditRest(id string, minutes int) error {
+	if minutes < 0 || minutes > MaxQuotaRest {
+		return fmt.Errorf("a credit rest is from 0 (magpie's ladder) to %d minutes (8 days), not %d", MaxQuotaRest, minutes)
+	}
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	p.CreditRest = minutes
+	return Save(*p)
+}
+
 // SetQuotaRest sets how many minutes the provider's keys sit out of quota
 // when the vendor doesn't say when they are back, 0 for the gateway's own.
 func SetQuotaRest(id string, minutes int) error {

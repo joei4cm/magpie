@@ -102,6 +102,31 @@ func TestKeyOutOfCreditRestsLongerEachTime(t *testing.T) {
 	}
 }
 
+// #8069: a provider's setting is a floor under the credit ladder, not a
+// replacement: the 24-hour minimum holds through the 8-hour rung, after
+// which the ladder grows above it. Vendor times and creditSoon still win.
+func TestKeyCreditRestSettingFloorsTheLadder(t *testing.T) {
+	near := func(d, want time.Duration) bool { return d > want-time.Minute && d <= want }
+	fresh(t)
+	s := New()
+	key := candidate{p: provider.Provider{ID: "configured", Key: "k", CreditRest: 24 * 60}, model: "m", rest: "configured#k"}
+	for i, want := range []time.Duration{24 * time.Hour, 24 * time.Hour, 24 * time.Hour, 24 * time.Hour, 3 * 24 * time.Hour, 7 * 24 * time.Hour} {
+		r := s.restAfter(key, http.StatusPaymentRequired, http.Header{}, nil)
+		if r.Why != failCredit || r.Failures != i+1 || !near(time.Until(r.Until), want) {
+			t.Fatalf("refusal %d: %v (%s, failures %d), want %v", i+1, time.Until(r.Until).Round(time.Second), r.Why, r.Failures, want)
+		}
+		expire(key.restKey())
+	}
+
+	// A time named by the vendor takes precedence over the configured floor.
+	fresh(t)
+	at := time.Now().Add(10 * 24 * time.Hour).Unix()
+	body := `{"error":{"type":"insufficient_quota","code":"project_spend_limit_exceeded","message":"x","resets_at":` + strconv.FormatInt(at, 10) + `}}`
+	if r := s.restAfter(key, http.StatusTooManyRequests, http.Header{}, []byte(body)); r.By != "resets" || !near(time.Until(r.Until), 10*24*time.Hour) {
+		t.Fatalf("named reset: %v by %s", time.Until(r.Until).Round(time.Second), r.By)
+	}
+}
+
 // A 402 that can pass soon, or for a smaller request, rests creditRest
 // each time, as before; one that names when it is back rests till then.
 func TestKeyCreditSoonDoesNotClimb(t *testing.T) {
@@ -120,7 +145,7 @@ func TestKeyCreditSoonDoesNotClimb(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fresh(t)
 			s := New()
-			key := candidate{p: provider.Provider{ID: "or", Key: "k"}, model: "m", rest: "or#k"}
+			key := candidate{p: provider.Provider{ID: "or", Key: "k", CreditRest: 24 * 60}, model: "m", rest: "or#k"}
 			for i := range 4 {
 				r := s.restAfter(key, tc.status, tc.header, []byte(tc.body))
 				// creditRest, or the shorter time it names (resetsAt

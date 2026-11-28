@@ -275,6 +275,10 @@ type Provider struct {
 	// back (#1772: Ollama Cloud's weekly limit); 0 is the gateway's own
 	// quarter of an hour. A time the vendor names stands over it.
 	QuotaRest int `json:"quotaRest,omitempty"`
+	// CreditRest is how many minutes one of its keys rests after it is
+	// out of money without the vendor saying when it is back (#8069).
+	// It sets a floor under the credit ladder; 0 leaves the ladder alone.
+	CreditRest int `json:"creditRest,omitempty"`
 	// QuotaResetAt is the time of day a key of it out of its allowance is
 	// back, when its vendor refuses for a day's allowance without saying
 	// when (#2008: a free tier's "today's free-model token quota"): "08:00"
@@ -1225,7 +1229,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.Patience = pk.Patience
 	// how long its accounts rest out of quota, and the most they rest
 	// while they keep failing (#2008); or not at all for a limit
-	a.QuotaRest, a.QuotaResetAt, a.RestCap, a.LimitRestOff = pk.QuotaRest, pk.QuotaResetAt, pk.RestCap, pk.LimitRestOff
+	a.QuotaRest, a.CreditRest, a.QuotaResetAt, a.RestCap, a.LimitRestOff = pk.QuotaRest, pk.CreditRest, pk.QuotaResetAt, pk.RestCap, pk.LimitRestOff
 	// what it bills against the official price (#819): an account's editor
 	// sets it as a key provider's does (PaulT on Discord, Codex)
 	a.PriceRate = pk.PriceRate
@@ -2153,6 +2157,7 @@ func normalize(p Provider) Provider {
 	p.MaxRPM = min(max(p.MaxRPM, 0), MaxRPMLimit)
 	p.MaxImages = normalMaxImages(p.MaxImages)
 	p.QuotaRest = min(max(p.QuotaRest, 0), MaxQuotaRest)
+	p.CreditRest = min(max(p.CreditRest, 0), MaxQuotaRest)
 	if p.RestCap != RestCapOff {
 		p.RestCap = min(max(p.RestCap, 0), MaxQuotaRest)
 	}

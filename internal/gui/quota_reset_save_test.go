@@ -28,6 +28,9 @@ func TestSaveKeepsQuotaResetAt(t *testing.T) {
 	if err := provider.SetRestCap("reset-test", 240); err != nil {
 		t.Fatal(err)
 	}
+	if err := provider.SetCreditRest("reset-test", 1440); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	providerRoutes(mux, nil)
 	w := httptest.NewRecorder()
@@ -39,7 +42,7 @@ func TestSaveKeepsQuotaResetAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.QuotaResetAt != "00:00+08:00" || got.RestCap != 240 || got.Name != "Reset" {
-		t.Fatalf("the save dropped the reset time %q or the rest cap %d", got.QuotaResetAt, got.RestCap)
+	if got.QuotaResetAt != "00:00+08:00" || got.CreditRest != 1440 || got.RestCap != 240 || got.Name != "Reset" {
+		t.Fatalf("the save dropped the reset time %q, the credit rest %d or the rest cap %d", got.QuotaResetAt, got.CreditRest, got.RestCap)
 	}
 }

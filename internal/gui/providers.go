@@ -2750,6 +2750,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if keepWins && old != nil {
 					in.RateWindows = old.RateWindows
 				}
+				// how long its keys rest out of credit, set with
+				// `magpie provider credit-rest`, which the form doesn't show:
+				// kept as it was (#8069)
+				if in.CreditRest == 0 && old != nil {
+					in.CreditRest = old.CreditRest
+				}
 				// how long its keys rest out of quota is set in
 				// providers.json or with `magpie provider quota-rest`,
 				// which the form doesn't show: kept as it was (#1772)

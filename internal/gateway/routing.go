@@ -324,10 +324,11 @@ var creditSoon = lazyre.New(`(?i)openrouter_in_flight_budget|can only afford|few
 // creditBackoff is the rest of a key (c, no subscription account) out of
 // credit, rested by id: the vendor's own time when it names one (a
 // Retry-After, a reset in its body or headers), creditRest when it says
-// it can pass soon (creditSoon), else the next rung of creditLadder —
-// the same rung while the last rest still runs (the lone key asked all
-// the same), one up once it has ended. n is the rung, 0 off the ladder.
-func creditBackoff(id string, header http.Header, body []byte, now time.Time) (d time.Duration, by string, n int, guessed bool) {
+// it can pass soon (creditSoon), else the next rung of creditLadder, at
+// least p's CreditRestFor — the same rung while the last rest still runs
+// (the lone key asked all the same), one up once it has ended. n is the
+// rung, 0 off the ladder.
+func creditBackoff(id string, p provider.Provider, header http.Header, body []byte, now time.Time) (d time.Duration, by string, n int, guessed bool) {
 	if w := resetsAt(body, now); w > 0 {
 		return min(w, longestMonthly), "resets", 0, false
 	}
@@ -348,7 +349,7 @@ func creditBackoff(id string, header http.Header, body []byte, now time.Time) (d
 		}
 	}
 	restingUntil.Unlock()
-	return creditLadder[min(n, len(creditLadder))-1], "credit", n, true
+	return max(creditLadder[min(n, len(creditLadder))-1], p.CreditRestFor()), "credit", n, true
 }
 
 var (
@@ -1789,7 +1790,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 			if c.p.PaidBesideFree(c.model) || c.p.FreeBesidePaid(c.model) || modelLimited(c, why, body) {
 				id = c.restID()
 			}
-			d, r.By, r.Failures, guessed = creditBackoff(id, header, body, now)
+			d, r.By, r.Failures, guessed = creditBackoff(id, c.p, header, body, now)
 		}
 	case failQuota:
 		if c.onCredits() {

@@ -157,6 +157,10 @@ const providerUsage = `usage:
                                           without saying when it is back (default: 15 minutes; at most 8 days),
                                           or until the time of day a daily allowance comes back, on this
                                           computer's clock or at the vendor's offset from UTC
+  magpie provider credit-rest <id> [30m|6h|24h|7d|default]
+                                          minimum rest after a key runs out of credit without the vendor naming
+                                          its reset; the credit ladder still climbs above it (default: ladder,
+                                          first rest 30 minutes; at most 8 days)
   magpie provider rest-cap <id> [1m|30m|6h|1d|off|default]
                                           the most a key or account sits out while it keeps failing or being
                                           rate limited, its rest doubling each time from a minute (default:
@@ -743,6 +747,8 @@ func providerCmd(args []string) error {
 		return autoIncludeCmd(rest)
 	case "quota-rest":
 		return quotaRestCmd(rest)
+	case "credit-rest":
+		return creditRestCmd(rest)
 	case "rest-cap":
 		return restCapCmd(rest)
 	case "listed":
@@ -2450,6 +2456,36 @@ func quotaRestCmd(rest []string) error {
 		fmt.Printf("%s · a key out of its allowance, with no word of when it is back, sits out %s\n", p.Name, restWords(d))
 	} else {
 		fmt.Printf("%s · a key out of its allowance, with no word of when it is back, sits out 15 minutes (magpie's own)\n", p.Name)
+	}
+	return nil
+}
+
+// creditRestCmd sets or shows the minimum a provider's keys rest after
+// running out of credit without the vendor naming a reset (#8069).
+func creditRestCmd(rest []string) error {
+	if len(rest) < 1 || len(rest) > 2 {
+		return fmt.Errorf("magpie provider credit-rest <id> [30m|6h|24h|7d|default]")
+	}
+	p, err := provider.Find(rest[0])
+	if err != nil {
+		return err
+	}
+	if len(rest) > 1 {
+		minutes, err := restMinutes(rest[1])
+		if err != nil {
+			return err
+		}
+		if err := provider.SetCreditRest(p.ID, minutes); err != nil {
+			return err
+		}
+		if p, err = provider.Find(p.ID); err != nil {
+			return err
+		}
+	}
+	if d := p.CreditRestFor(); d > 0 {
+		fmt.Printf("%s · a key out of credit rests at least %s before the credit ladder climbs\n", p.Name, restWords(d))
+	} else {
+		fmt.Printf("%s · a key out of credit follows magpie's ladder, first rest 30 minutes\n", p.Name)
 	}
 	return nil
 }
